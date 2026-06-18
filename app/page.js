@@ -423,9 +423,13 @@ export default function DinnerForecast() {
   const [confirmed, setConfirmed] = useState(false);
   const [suggesting, setSuggesting] = useState(null); // meal id currently fetching ingredients
   const [saveStatus, setSaveStatus] = useState("idle"); // idle | saving | saved | error
+  const [retroOverrides, setRetroOverrides] = useState({});
+  const [showRetroConfirm, setShowRetroConfirm] = useState(false);
+  const [retroConfirmed, setRetroConfirmed] = useState(false);
 
   const today = useMemo(() => new Date(), []);
   const weekStart = useMemo(() => mondayOfWeek(today, weekOffset), [today, weekOffset]);
+  const retroWeekStart = useMemo(() => mondayOfWeek(today, weekOffset - 1), [today, weekOffset]);
 
   /* load once from Supabase; seed on first run */
   useEffect(() => {
@@ -470,6 +474,10 @@ export default function DinnerForecast() {
   const plan = useMemo(
     () => generatePlan(library, weeks, params, seed, weekStart, fixedMeals),
     [library, weeks, params, seed, weekStart, fixedMeals]
+  );
+  const retroPlan = useMemo(
+    () => (library.length ? generatePlan(library, weeks, params, seed, retroWeekStart) : []),
+    [library, weeks, params, seed, retroWeekStart]
   );
   const byId = useMemo(() => Object.fromEntries(library.map((m) => [m.id, m])), [library]);
 
@@ -517,6 +525,15 @@ export default function DinnerForecast() {
     setTimeout(() => setConfirmed(false), 2400);
   }, [plan, overrides]);
 
+  const confirmRetroWeek = useCallback(() => {
+    if (!retroPlan.length) return;
+    const newWeek = retroPlan.map((d, i) => retroOverrides[i] ?? d.mealId);
+    setWeeks((W) => [newWeek, ...W]);
+    setShowRetroConfirm(false);
+    setRetroOverrides({});
+    setRetroConfirmed(true);
+    setTimeout(() => setRetroConfirmed(false), 2400);
+  }, [retroPlan, retroOverrides]);
   /* toggle lock on a forecast day — locking pins the current meal through re-rolls;
      unlocking clears the pin and reverts to the engine's suggestion */
   const toggleLock = useCallback((i) => {
@@ -876,15 +893,95 @@ export default function DinnerForecast() {
 
       {tab === "history" && (
         <section className="panel">
-          <div className="sec-head">
+          {hasData && (
+            <>
+              <div className="sec-head">
+                <h2>Log last week</h2>
+                {!showRetroConfirm && (
+                  <button className="btn" onClick={() => setShowRetroConfirm(true)}>
+                    <Plus size={15} /> Log last week
+                  </button>
+                )}
+              </div>
+              <p className="note">
+                Pre-filled from the model — correct any nights that differed, then confirm.
+              </p>
+
+              {retroConfirmed && (
+                <div className="confirmed-note">
+                  Last week logged — the forecast will learn from it.
+                </div>
+              )}
+
+              {showRetroConfirm && (
+                <div className="retro-confirm">
+                  <div className="retro-range">
+                    {retroPlan.length
+                      ? `${fmt(retroPlan[0].date)} – ${fmt(retroPlan[retroPlan.length - 1].date)}`
+                      : ""}
+                  </div>
+                  <ol className="retro-list">
+                    {retroPlan.map((d, i) => {
+                      const did = retroOverrides[i] ?? d.mealId;
+                      return (
+                        <li key={i} className="retro-row">
+                          <div className="retro-day">
+                            <span className="dow">{DAY_FULL[d.dow]}</span>
+                            <span className="date">{fmtDM(d.date)}</span>
+                          </div>
+                          <select
+                            className="retro-select"
+                            value={did}
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              setRetroOverrides((o) => {
+                                const next = { ...o };
+                                if (v === d.mealId) delete next[i];
+                                else next[i] = v;
+                                return next;
+                              });
+                            }}
+                          >
+                            <option value="">—</option>
+                            {library.map((m) => (
+                              <option key={m.id} value={m.id}>
+                                {m.name}
+                              </option>
+                            ))}
+                          </select>
+                        </li>
+                      );
+                    })}
+                  </ol>
+                  <div className="retro-actions">
+                    <button className="btn cta" onClick={confirmRetroWeek}>
+                      <Check size={15} /> Confirm last week
+                    </button>
+                    <button
+                      className="btn ghost"
+                      onClick={() => {
+                        setShowRetroConfirm(false);
+                        setRetroOverrides({});
+                      }}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+
+          <div className={`sec-head${hasData ? " mt" : ""}`}>
             <h2>Trailing weeks</h2>
             <button className="btn ghost" onClick={addWeek}>
               <Plus size={15} /> Week
             </button>
           </div>
           <p className="note">
-            Newest week at the top. Fill in the dinners you actually had. More weeks sharpens the
-            day-of-week pattern; the half-life control decides how fast old weeks stop counting.
+            The full record — use this to correct older weeks or fix individual nights.
+            More weeks sharpens the day-of-week pattern; the half-life control decides how fast
+            old weeks stop counting.
           </p>
 
           <div className="grid-wrap">
@@ -1268,6 +1365,19 @@ const CSS = `
 .wk-label{font-family:'Space Mono',monospace;font-size:10.5px;color:var(--ink-soft);white-space:nowrap;padding-left:9px!important;text-align:left!important;}
 .grid select{font-family:'Inter',sans-serif;font-size:11.5px;max-width:88px;width:100%;padding:5px 4px;border:1px solid var(--line);border-radius:2px;background:var(--paper);color:var(--ink);}
 .mt{margin-top:18px;}
+
+/* ---- retro confirm (log last week) ---- */
+.retro-confirm{border:1px solid var(--line);border-radius:4px;background:var(--card);padding:14px 14px 10px;margin-bottom:4px;}
+.retro-range{font-family:'Space Mono',monospace;font-size:11.5px;color:var(--ink-soft);margin-bottom:12px;letter-spacing:.02em;}
+.retro-list{list-style:none;margin:0;padding:0;}
+.retro-row{display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid var(--line);}
+.retro-row:last-child{border-bottom:none;}
+.retro-day{flex:0 0 110px;}
+.retro-day .dow{font-family:'Fraunces',serif;font-size:15px;font-weight:600;display:block;line-height:1.2;}
+.retro-day .date{font-family:'Space Mono',monospace;font-size:10.5px;color:var(--ink-soft);}
+.retro-select{flex:1;font-family:'Inter',sans-serif;font-size:13.5px;padding:7px 9px;border:1px solid var(--line);border-radius:2px;background:var(--paper);color:var(--ink);}
+.retro-actions{display:flex;gap:8px;margin-top:14px;flex-wrap:wrap;}
+@media (max-width:520px){.retro-day{flex:0 0 82px;} .retro-day .dow{font-size:13px;} .retro-select{font-size:13px;padding:7px 6px;}}
 
 .ft{margin-top:30px;padding-top:16px;border-top:1px solid var(--line);font-size:12px;color:var(--ink-soft);line-height:1.5;max-width:62ch;}
 
