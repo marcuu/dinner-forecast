@@ -588,8 +588,8 @@ export default function DinnerForecast() {
                     : ""}
                 </span>
                 <div className="head-actions">
-                  <button className="btn ghost" onClick={() => setShoppingOpen((s) => !s)}>
-                    <ListChecks size={15} /> Shopping list
+                  <button className="btn cta" onClick={confirmWeek}>
+                    <Check size={15} /> Confirm week
                   </button>
                   <button
                     className="btn ghost"
@@ -600,11 +600,14 @@ export default function DinnerForecast() {
                   >
                     <Dices size={15} /> Re-roll
                   </button>
-                  <button className="btn" onClick={confirmWeek}>
-                    <Check size={15} /> Confirm week
+                  <button className="btn ghost" onClick={() => setShoppingOpen((s) => !s)}>
+                    <ListChecks size={15} /> Shopping list
                   </button>
                 </div>
               </div>
+              <p className="flywheel-hint">
+                Confirmed weeks sharpen the forecast.
+              </p>
 
               {confirmed && (
                 <div className="confirmed-note">
@@ -1078,8 +1081,13 @@ const CSS = `
 .btn:hover{background:#0e221e;}
 .btn.ghost{background:transparent;color:var(--ink);border:1px solid var(--ink);}
 .btn.ghost:hover{background:rgba(22,48,43,.06);}
+.btn.cta{background:var(--amber);color:var(--card);font-weight:700;padding:9px 16px;
+  box-shadow:0 1px 0 rgba(122,74,30,.35);}
+.btn.cta:hover{background:#b0641f;}
 .btn.danger{color:var(--clay);border-color:var(--clay);}
 .btn.danger:hover{background:rgba(168,71,46,.07);}
+.flywheel-hint{font-family:'Space Mono',monospace;font-size:11px;letter-spacing:.04em;
+  color:var(--ink-soft);text-align:right;margin:8px 0 0;}
 
 .empty{text-align:center;padding:48px 0;color:var(--ink-soft);}
 .empty p{margin-bottom:16px;}
