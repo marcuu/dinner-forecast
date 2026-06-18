@@ -529,7 +529,7 @@ export default function DinnerForecast() {
   const clearExample = async () => {
     setLibrary([]);
     setWeeks([]);
-    setTab("history");
+    setTab("library");
   };
 
   if (!loaded) return <div className="loading">Loading the almanac…</div>;
@@ -554,7 +554,10 @@ export default function DinnerForecast() {
           Forecast
         </button>
         <button className={tab === "history" ? "tab on" : "tab"} onClick={() => setTab("history")}>
-          History &amp; model
+          History
+        </button>
+        <button className={tab === "library" ? "tab on" : "tab"} onClick={() => setTab("library")}>
+          Library
         </button>
         <span className={`save-status ${saveStatus}`}>
           {saveStatus === "saving"
@@ -572,7 +575,7 @@ export default function DinnerForecast() {
           {!hasData ? (
             <div className="empty">
               <p>No history to forecast from yet.</p>
-              <button className="btn" onClick={() => setTab("history")}>
+              <button className="btn" onClick={() => setTab("library")}>
                 Add your dinners
               </button>
             </div>
@@ -635,7 +638,7 @@ export default function DinnerForecast() {
               {weeks.length === 0 && (
                 <div className="cold-note">
                   No week history yet — this is a shuffle of your library, not a forecast. Add some
-                  weeks under History &amp; model.
+                  weeks under History.
                 </div>
               )}
 
@@ -816,6 +819,66 @@ export default function DinnerForecast() {
       {tab === "history" && (
         <section className="panel">
           <div className="sec-head">
+            <h2>Trailing weeks</h2>
+            <button className="btn ghost" onClick={addWeek}>
+              <Plus size={15} /> Week
+            </button>
+          </div>
+          <p className="note">
+            Newest week at the top. Fill in the dinners you actually had. More weeks sharpens the
+            day-of-week pattern; the half-life control decides how fast old weeks stop counting.
+          </p>
+
+          <div className="grid-wrap">
+            <table className="grid">
+              <thead>
+                <tr>
+                  <th className="wk-h"></th>
+                  {DAY_INIT.map((d, i) => (
+                    <th key={i}>{d}</th>
+                  ))}
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {weeks.map((wk, wi) => (
+                  <tr key={wi}>
+                    <td className="wk-label">{wi === 0 ? "last wk" : `${wi + 1} wks`}</td>
+                    {wk.map((cell, di) => (
+                      <td key={di}>
+                        <select value={cell} onChange={(e) => setCell(wi, di, e.target.value)}>
+                          <option value="">—</option>
+                          {library.map((m) => (
+                            <option key={m.id} value={m.id}>
+                              {m.name}
+                            </option>
+                          ))}
+                        </select>
+                      </td>
+                    ))}
+                    <td>
+                      <button className="icon-btn" onClick={() => removeWeek(wi)} aria-label="Remove week">
+                        <Trash2 size={14} />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+                {!weeks.length && (
+                  <tr>
+                    <td colSpan={9} className="muted pad">
+                      No weeks yet — add one above.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
+      {tab === "library" && (
+        <section className="panel">
+          <div className="sec-head">
             <h2>Meal library</h2>
             <span className="muted">{library.length} dinners</span>
           </div>
@@ -917,62 +980,6 @@ export default function DinnerForecast() {
             ))}
             {!library.length && <li className="muted pad">No dinners yet — add a few above.</li>}
           </ul>
-
-          <div className="sec-head mt">
-            <h2>Trailing weeks</h2>
-            <button className="btn ghost" onClick={addWeek}>
-              <Plus size={15} /> Week
-            </button>
-          </div>
-          <p className="note">
-            Newest week at the top. Fill in the dinners you actually had. More weeks sharpens the
-            day-of-week pattern; the half-life control decides how fast old weeks stop counting.
-          </p>
-
-          <div className="grid-wrap">
-            <table className="grid">
-              <thead>
-                <tr>
-                  <th className="wk-h"></th>
-                  {DAY_INIT.map((d, i) => (
-                    <th key={i}>{d}</th>
-                  ))}
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {weeks.map((wk, wi) => (
-                  <tr key={wi}>
-                    <td className="wk-label">{wi === 0 ? "last wk" : `${wi + 1} wks`}</td>
-                    {wk.map((cell, di) => (
-                      <td key={di}>
-                        <select value={cell} onChange={(e) => setCell(wi, di, e.target.value)}>
-                          <option value="">—</option>
-                          {library.map((m) => (
-                            <option key={m.id} value={m.id}>
-                              {m.name}
-                            </option>
-                          ))}
-                        </select>
-                      </td>
-                    ))}
-                    <td>
-                      <button className="icon-btn" onClick={() => removeWeek(wi)} aria-label="Remove week">
-                        <Trash2 size={14} />
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-                {!weeks.length && (
-                  <tr>
-                    <td colSpan={9} className="muted pad">
-                      No weeks yet — add one above.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
 
           {hasData && (
             <button className="btn danger ghost mt" onClick={clearExample}>
