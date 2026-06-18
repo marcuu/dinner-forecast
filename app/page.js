@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useMemo, useCallback } from "react";
-import { Dices, Plus, Trash2, ChevronDown, ChevronRight, ListChecks, Check, Sparkles } from "lucide-react";
+import { Dices, Plus, Trash2, ChevronDown, ChevronRight, ListChecks, Check, Sparkles, Lock, LockOpen } from "lucide-react";
 import { loadState, saveState } from "../lib/store";
 
 /* ------------------------------------------------------------------ *
@@ -148,7 +148,7 @@ function weightedPick(entries, rng) {
 }
 
 /* ------------------------------ the engine ------------------------------ */
-function generatePlan(library, weeks, params, seed, startDate) {
+function generatePlan(library, weeks, params, seed, startDate, lockedMeals = {}) {
   const byId = Object.fromEntries(library.map((m) => [m.id, m]));
   const { halfLife, nudge, epsilon, repeatWindow } = params;
   if (!library.length) return [];
@@ -172,6 +172,19 @@ function generatePlan(library, weeks, params, seed, startDate) {
 
   days.forEach((day) => {
     const dow = day.dow;
+
+    // --- locked days: pin the meal and update tracking state, skip normal generation ---
+    if (lockedMeals[dow] !== undefined) {
+      const chosenId = lockedMeals[dow];
+      const chosen = byId[chosenId];
+      if (chosen) {
+        placed.push(chosenId);
+        if (chosen.isTreat) treatsPlaced++;
+        plan.push({ date: day.date, dow, mealId: chosenId, prob: 1, candidates: [],
+          rationale: "Locked", tilt: [], exploring: false, cold: false, skip: chosen.isSkip, locked: true });
+        return;
+      }
+    }
 
     // --- base distribution ---
     const base = {};
@@ -403,6 +416,7 @@ export default function DinnerForecast() {
   const [editMeal, setEditMeal] = useState(null);
   const [newMeal, setNewMeal] = useState("");
   const [overrides, setOverrides] = useState({}); // dayIndex -> mealId (manual swap)
+  const [lockedDays, setLockedDays] = useState({}); // dayIndex -> true (survives re-roll)
   const [shoppingOpen, setShoppingOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const [weekOffset, setWeekOffset] = useState(0); // weeks forward from this week (per confirm)
@@ -447,9 +461,19 @@ export default function DinnerForecast() {
     return () => clearTimeout(t);
   }, [library, weeks, params, loaded]);
 
+  // meals pinned by the user — passed to the engine so anti-repetition stays correct
+  const fixedMeals = useMemo(() => {
+    const out = {};
+    Object.keys(lockedDays).forEach((k) => {
+      const i = parseInt(k);
+      if (overrides[i] !== undefined) out[i] = overrides[i];
+    });
+    return out;
+  }, [lockedDays, overrides]);
+
   const plan = useMemo(
-    () => generatePlan(library, weeks, params, seed, weekStart),
-    [library, weeks, params, seed, weekStart]
+    () => generatePlan(library, weeks, params, seed, weekStart, fixedMeals),
+    [library, weeks, params, seed, weekStart, fixedMeals]
   );
   const retroPlan = useMemo(
     () => (library.length ? generatePlan(library, weeks, params, seed, retroWeekStart) : []),
@@ -457,10 +481,6 @@ export default function DinnerForecast() {
   );
   const byId = useMemo(() => Object.fromEntries(library.map((m) => [m.id, m])), [library]);
 
-  /* manual swaps reset when you re-roll a fresh week */
-  useEffect(() => {
-    setOverrides({});
-  }, [seed]);
 
   /* deduped shopping list across the 7 forecast dinners (respecting swaps) */
   const shoppingList = useMemo(() => {
@@ -498,7 +518,9 @@ export default function DinnerForecast() {
     setWeeks((W) => [newWeek, ...W]);
     setWeekOffset((o) => o + 1);
     setOpenDay(null);
-    setSeed((s) => s + 1); // fresh plan for next week; the [seed] effect clears swaps
+    setOverrides({});
+    setLockedDays({});
+    setSeed((s) => s + 1);
     setConfirmed(true);
     setTimeout(() => setConfirmed(false), 2400);
   }, [plan, overrides]);
@@ -512,6 +534,20 @@ export default function DinnerForecast() {
     setRetroConfirmed(true);
     setTimeout(() => setRetroConfirmed(false), 2400);
   }, [retroPlan, retroOverrides]);
+  /* toggle lock on a forecast day — locking pins the current meal through re-rolls;
+     unlocking clears the pin and reverts to the engine's suggestion */
+  const toggleLock = useCallback((i) => {
+    if (lockedDays[i]) {
+      setLockedDays((ld) => { const n = { ...ld }; delete n[i]; return n; });
+      setOverrides((o) => { const n = { ...o }; delete n[i]; return n; });
+    } else {
+      const mealId = overrides[i] ?? plan[i]?.mealId;
+      if (mealId) {
+        setOverrides((o) => ({ ...o, [i]: mealId }));
+        setLockedDays((ld) => ({ ...ld, [i]: true }));
+      }
+    }
+  }, [lockedDays, overrides, plan]);
 
   /* ---- library ops ---- */
   const addMeal = useCallback(() => {
@@ -612,7 +648,14 @@ export default function DinnerForecast() {
                   <button
                     className="btn ghost"
                     onClick={() => {
-                      setOverrides({});
+                      setOverrides((o) => {
+                        const next = {};
+                        Object.keys(lockedDays).forEach((k) => {
+                          const i = parseInt(k);
+                          if (o[i] !== undefined) next[i] = o[i];
+                        });
+                        return next;
+                      });
                       setSeed((s) => s + 1);
                     }}
                   >
@@ -674,37 +717,48 @@ export default function DinnerForecast() {
                       key={i}
                       className={`row${d.exploring ? " explore" : ""}${d.skip ? " skip" : ""}${
                         swapped ? " swapped" : ""
-                      }`}
+                      }${lockedDays[i] ? " locked" : ""}`}
                     >
-                      <button className="row-main" onClick={() => setOpenDay(open ? null : i)}>
-                        <div className="row-day">
-                          <span className="dow">{DAY_FULL[d.dow]}</span>
-                          <span className="date">{fmtDM(d.date)}</span>
-                        </div>
-                        <div className="row-meal">
-                          <div className="meal-line">
-                            <span className="meal-name">{meal ? meal.name : "—"}</span>
-                            {swapped ? (
-                              <span className="prob your">your pick</span>
-                            ) : (
-                              <span className="prob">{Math.round(d.prob * 100)}%</span>
-                            )}
+                      <div className="row-wrap">
+                        <button
+                          className={`lock-btn${lockedDays[i] ? " on" : ""}`}
+                          onClick={() => toggleLock(i)}
+                          aria-label={lockedDays[i] ? "Unlock this night" : "Lock this night"}
+                        >
+                          {lockedDays[i] ? <Lock size={13} /> : <LockOpen size={13} />}
+                        </button>
+                        <button className="row-main" onClick={() => setOpenDay(open ? null : i)}>
+                          <div className="row-day">
+                            <span className="dow">{DAY_FULL[d.dow]}</span>
+                            <span className="date">{fmtDM(d.date)}</span>
                           </div>
-                          <div className="bar">
-                            <span style={{ width: `${swapped ? 100 : Math.max(4, d.prob * 100)}%` }} />
+                          <div className="row-meal">
+                            <div className="meal-line">
+                              <span className="meal-name">{meal ? meal.name : "—"}</span>
+                              {d.locked ? (
+                                <span className="prob locked-prob">locked</span>
+                              ) : swapped ? (
+                                <span className="prob your">your pick</span>
+                              ) : (
+                                <span className="prob">{Math.round(d.prob * 100)}%</span>
+                              )}
+                            </div>
+                            <div className="bar">
+                              <span style={{ width: `${d.locked || swapped ? 100 : Math.max(4, d.prob * 100)}%` }} />
+                            </div>
+                            <div className="why">
+                              <span>{d.locked ? "Locked — survives re-roll" : swapped ? "Swapped in manually" : d.rationale}</span>
+                              {!swapped && !d.locked &&
+                                d.tilt.map((t) => (
+                                  <span key={t} className="tilt">
+                                    {t}
+                                  </span>
+                                ))}
+                            </div>
                           </div>
-                          <div className="why">
-                            <span>{swapped ? "Swapped in manually" : d.rationale}</span>
-                            {!swapped &&
-                              d.tilt.map((t) => (
-                                <span key={t} className="tilt">
-                                  {t}
-                                </span>
-                              ))}
-                          </div>
-                        </div>
-                        <span className="chev">{open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}</span>
-                      </button>
+                          <span className="chev">{open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}</span>
+                        </button>
+                      </div>
                       {open && (
                         <div className="dist">
                           <div className="swap-row">
@@ -1195,11 +1249,18 @@ const CSS = `
 .row{border-bottom:1px solid var(--line);}
 .row:last-child{border-bottom:none;}
 .row.explore{background:linear-gradient(90deg,rgba(110,139,106,.10),transparent 60%);}
+.row.locked{background:rgba(197,115,43,.06);}
 .row.skip .meal-name{color:var(--ink-soft);font-style:italic;}
 .row.skip .bar>span{background:var(--ink-soft);opacity:.35;}
+.row.locked .bar>span{background:var(--amber);opacity:.55;}
 .cold-note{font-size:12.5px;line-height:1.45;background:rgba(197,115,43,.10);border:1px solid var(--amber-soft);color:#7a4a1e;padding:9px 12px;border-radius:3px;margin-bottom:12px;}
 .confirmed-note{font-size:12.5px;line-height:1.45;background:rgba(110,139,106,.14);border:1px solid var(--sage);color:#3f5a3b;padding:9px 12px;border-radius:3px;margin-bottom:12px;}
-.row-main{width:100%;display:flex;align-items:flex-start;gap:14px;padding:14px 14px;background:none;border:none;text-align:left;cursor:pointer;}
+.row-wrap{display:flex;align-items:stretch;}
+.lock-btn{background:none;border:none;border-right:1px solid var(--line);padding:0 11px;cursor:pointer;
+  color:var(--line);display:flex;align-items:center;flex-shrink:0;transition:color .15s,background .15s;}
+.lock-btn:hover{background:rgba(22,48,43,.04);color:var(--ink-soft);}
+.lock-btn.on{color:var(--amber);}
+.row-main{flex:1;min-width:0;display:flex;align-items:flex-start;gap:14px;padding:14px 14px;background:none;border:none;text-align:left;cursor:pointer;}
 .row-day{flex:0 0 78px;padding-top:1px;}
 .row-day .dow{font-family:'Fraunces',serif;font-size:16px;font-weight:600;display:block;line-height:1.1;}
 .row-day .date{font-family:'Space Mono',monospace;font-size:11px;color:var(--ink-soft);letter-spacing:.02em;}
@@ -1207,13 +1268,14 @@ const CSS = `
 .meal-line{display:flex;justify-content:space-between;align-items:baseline;gap:10px;}
 .meal-name{font-size:16px;font-weight:600;color:var(--ink);}
 .prob{font-family:'Space Mono',monospace;font-size:13px;font-weight:700;color:var(--amber);}
+.prob.locked-prob{font-family:'Space Mono',monospace;font-size:10px;letter-spacing:.03em;color:var(--amber);text-transform:uppercase;}
 .bar{height:6px;background:rgba(22,48,43,.08);border-radius:3px;margin:7px 0 7px;overflow:hidden;}
 .bar>span{display:block;height:100%;background:var(--amber);border-radius:3px;transition:width .5s cubic-bezier(.2,.7,.2,1);}
 .why{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:12.5px;color:var(--ink-soft);}
 .tilt{font-family:'Space Mono',monospace;font-size:10px;letter-spacing:.03em;background:rgba(110,139,106,.18);color:#3f5a3b;padding:2px 6px;border-radius:2px;}
 .chev{flex:0 0 16px;color:var(--ink-soft);padding-top:2px;}
 
-.dist{padding:2px 14px 14px 106px;background:rgba(22,48,43,.025);}
+.dist{padding:2px 14px 14px 142px;background:rgba(22,48,43,.025);}
 .dist-label{font-family:'Space Mono',monospace;font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-soft);margin:6px 0 8px;}
 .cand{display:flex;align-items:center;gap:10px;margin-bottom:5px;width:100%;background:none;border:none;padding:3px 4px;border-radius:3px;cursor:pointer;text-align:left;}
 .cand:hover{background:rgba(22,48,43,.05);}
@@ -1324,7 +1386,7 @@ button:focus-visible, input:focus-visible, select:focus-visible{outline:2px soli
 @media (max-width:520px){
   .hd h1{font-size:32px;}
   .row-day{flex:0 0 64px;}
-  .dist{padding-left:78px;}
+  .dist{padding-left:114px;}
   .cand-name{flex-basis:96px;}
 }
 @media (prefers-reduced-motion:reduce){ .bar>span{transition:none;} }
