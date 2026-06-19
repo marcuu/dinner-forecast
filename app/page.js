@@ -94,29 +94,14 @@ function guessIngredients(name) {
 /* ---- ask the model for ingredients; falls back to the guesser on any error ---- */
 async function aiIngredients(name) {
   try {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
+    const res = await fetch("/api/ingredients", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: "claude-sonnet-4-6",
-        max_tokens: 1000,
-        messages: [
-          {
-            role: "user",
-            content: `List the major shopping ingredients for the home-cooked family dinner "${name}". Reply with ONLY a JSON array of 4 to 7 short lowercase ingredient strings — no quantities, no prose, no markdown. Example: ["chicken thighs","peppers","rice"]`,
-          },
-        ],
-      }),
+      body: JSON.stringify({ name }),
     });
     const data = await res.json();
-    const text = (data.content || [])
-      .filter((b) => b.type === "text")
-      .map((b) => b.text)
-      .join("")
-      .trim();
-    const arr = JSON.parse(text.replace(/```json|```/g, "").trim());
-    if (Array.isArray(arr) && arr.length) {
-      return arr.map((x) => String(x).trim()).filter(Boolean).slice(0, 8);
+    if (Array.isArray(data.ingredients) && data.ingredients.length) {
+      return data.ingredients;
     }
     return null;
   } catch {
@@ -811,7 +796,7 @@ export default function DinnerForecast() {
                             </div>
                           )}
 
-                          <div className="dist-label">Model's distribution for this {DAY_FULL[d.dow]}</div>
+                          <div className="dist-label">Model&apos;s distribution for this {DAY_FULL[d.dow]}</div>
                           {d.candidates.map((c) => (
                             <button
                               key={c.id}
@@ -1153,7 +1138,7 @@ export default function DinnerForecast() {
       )}
 
       <footer className="ft">
-        Forecast, not prescription. Numbers are the model's own confidence in each pick given your
+        Forecast, not prescription. Numbers are the model&apos;s own confidence in each pick given your
         history, the constraints, and the nudge — not a claim about nutrition.
       </footer>
     </div>
