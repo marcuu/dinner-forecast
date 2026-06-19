@@ -1073,6 +1073,14 @@ export default function DinnerForecast() {
                 </button>
                 {editMeal === m.id && (
                   <div className="meal-edit">
+                    <label className="meal-edit-name">
+                      Name
+                      <input
+                        type="text"
+                        value={m.name}
+                        onChange={(e) => updateMeal(m.id, { name: e.target.value })}
+                      />
+                    </label>
                     <label>
                       Protein
                       <select value={m.protein} onChange={(e) => updateMeal(m.id, { protein: e.target.value })}>
@@ -1351,6 +1359,8 @@ const CSS = `
 
 .meal-edit{flex-basis:100%;display:flex;gap:16px;flex-wrap:wrap;align-items:flex-end;padding:0 13px 13px;}
 .meal-edit label{font-size:11px;color:var(--ink-soft);display:flex;flex-direction:column;gap:4px;font-family:'Space Mono',monospace;letter-spacing:.04em;text-transform:uppercase;}
+.meal-edit-name{flex-basis:100%;}
+.meal-edit-name input{font-family:'Inter',sans-serif;font-size:13px;padding:6px 8px;border:1px solid var(--line);border-radius:2px;background:var(--paper);color:var(--ink);text-transform:none;letter-spacing:0;width:100%;box-sizing:border-box;}
 .meal-edit select{font-family:'Inter',sans-serif;font-size:13px;padding:6px 8px;border:1px solid var(--line);border-radius:2px;background:var(--paper);color:var(--ink);text-transform:none;letter-spacing:0;}
 .toggles{display:flex;gap:6px;}
 .toggle{font-family:'Space Mono',monospace;font-size:11px;padding:6px 10px;border:1px solid var(--line);border-radius:2px;background:var(--paper);color:var(--ink-soft);cursor:pointer;}
