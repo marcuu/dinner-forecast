@@ -582,10 +582,7 @@ export default function DinnerForecast() {
       <header className="hd">
         <div className="eyebrow">THE HOLME VALLEY ALMANAC</div>
         <h1>Dinner Forecast</h1>
-        <p className="sub">
-          Seven nights, predicted from what you actually eat — recency-weighted, sampled rather than
-          averaged, and nudged just a little toward balance.
-        </p>
+
       </header>
 
       <nav className="tabs">
