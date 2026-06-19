@@ -404,17 +404,19 @@ export default function DinnerForecast() {
   const [lockedDays, setLockedDays] = useState({}); // dayIndex -> true (survives re-roll)
   const [shoppingOpen, setShoppingOpen] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [weekOffset, setWeekOffset] = useState(0); // weeks forward from this week (per confirm)
   const [confirmed, setConfirmed] = useState(false);
   const [suggesting, setSuggesting] = useState(null); // meal id currently fetching ingredients
   const [saveStatus, setSaveStatus] = useState("idle"); // idle | saving | saved | error
   const [retroOverrides, setRetroOverrides] = useState({});
   const [showRetroConfirm, setShowRetroConfirm] = useState(false);
   const [retroConfirmed, setRetroConfirmed] = useState(false);
+  const [plannedWeeks, setPlannedWeeks] = useState([]); // { weekMonday: "YYYY-MM-DD", meals: [7 ids] }[]
+  const [showPlanNext, setShowPlanNext] = useState(false);
+  const [planNextOverrides, setPlanNextOverrides] = useState({});
 
   const today = useMemo(() => new Date(), []);
-  const weekStart = useMemo(() => mondayOfWeek(today, weekOffset), [today, weekOffset]);
-  const retroWeekStart = useMemo(() => mondayOfWeek(today, weekOffset - 1), [today, weekOffset]);
+  const weekStart = useMemo(() => mondayOfWeek(today, plannedWeeks.length), [today, plannedWeeks.length]);
+  const retroWeekStart = useMemo(() => mondayOfWeek(today, -1), [today]);
 
   /* load once from Supabase; seed on first run */
   useEffect(() => {
@@ -422,13 +424,24 @@ export default function DinnerForecast() {
       const st = await loadState();
       if (st && Array.isArray(st.library) && st.library.length) {
         setLibrary(st.library);
-        setWeeks(Array.isArray(st.weeks) ? st.weeks : []);
+        let hist = Array.isArray(st.weeks) ? st.weeks : [];
+        let pw = Array.isArray(st.plannedWeeks) ? st.plannedWeeks : [];
+        // Graduate any planned weeks whose Monday has already passed into history
+        const thisMonday = mondayOfWeek(new Date(), 0);
+        const graduating = pw.filter((p) => new Date(p.weekMonday + "T00:00:00") < thisMonday);
+        const remaining = pw.filter((p) => new Date(p.weekMonday + "T00:00:00") >= thisMonday);
+        if (graduating.length) {
+          graduating.sort((a, b) => new Date(a.weekMonday) - new Date(b.weekMonday));
+          hist = [...graduating.map((p) => p.meals).reverse(), ...hist];
+        }
+        setWeeks(hist);
+        setPlannedWeeks(remaining);
         if (st.params) setParams((p) => ({ ...p, ...st.params }));
       } else if (!(st && st.cleared)) {
         const { lib: el, weeks: ew } = seedData();
         setLibrary(el);
         setWeeks(ew);
-        await saveState({ library: el, weeks: ew, params, cleared: false });
+        await saveState({ library: el, weeks: ew, params, plannedWeeks: [], cleared: false });
       }
       setLoaded(true);
     })();
@@ -440,11 +453,11 @@ export default function DinnerForecast() {
     if (!loaded) return;
     setSaveStatus("saving");
     const t = setTimeout(async () => {
-      const ok = await saveState({ library, weeks, params, cleared: library.length === 0 });
+      const ok = await saveState({ library, weeks, params, plannedWeeks, cleared: library.length === 0 });
       setSaveStatus(ok ? "saved" : "error");
     }, 600);
     return () => clearTimeout(t);
-  }, [library, weeks, params, loaded]);
+  }, [library, weeks, params, plannedWeeks, loaded]);
 
   // meals pinned by the user — passed to the engine so anti-repetition stays correct
   const fixedMeals = useMemo(() => {
@@ -499,16 +512,25 @@ export default function DinnerForecast() {
      pushing older weeks down, then roll forward to plan the next week */
   const confirmWeek = useCallback(() => {
     if (!plan.length) return;
-    const newWeek = plan.map((d, i) => overrides[i] ?? d.mealId);
-    setWeeks((W) => [newWeek, ...W]);
-    setWeekOffset((o) => o + 1);
+    const weekMonday = weekStart.toISOString().split("T")[0];
+    const meals = plan.map((d, i) => overrides[i] ?? d.mealId);
+    setPlannedWeeks((pw) => [...pw, { weekMonday, meals }]);
     setOpenDay(null);
     setOverrides({});
     setLockedDays({});
     setSeed((s) => s + 1);
     setConfirmed(true);
     setTimeout(() => setConfirmed(false), 2400);
-  }, [plan, overrides]);
+  }, [plan, overrides, weekStart]);
+
+  const confirmPlanNext = useCallback(() => {
+    if (!plan.length) return;
+    const weekMonday = weekStart.toISOString().split("T")[0];
+    const meals = plan.map((d, i) => planNextOverrides[i] ?? d.mealId);
+    setPlannedWeeks((pw) => [...pw, { weekMonday, meals }]);
+    setShowPlanNext(false);
+    setPlanNextOverrides({});
+  }, [plan, planNextOverrides, weekStart]);
 
   const confirmRetroWeek = useCallback(() => {
     if (!retroPlan.length) return;
@@ -565,9 +587,18 @@ export default function DinnerForecast() {
   const setCell = (wi, di, val) =>
     setWeeks((W) => W.map((wk, i) => (i === wi ? wk.map((c, j) => (j === di ? val : c)) : wk)));
 
+  /* ---- planned weeks ops ---- */
+  const setPlannedCell = (wi, di, val) =>
+    setPlannedWeeks((pw) => pw.map((wk, i) =>
+      i === wi ? { ...wk, meals: wk.meals.map((m, j) => (j === di ? val : m)) } : wk
+    ));
+  const removePlannedWeek = (wi) =>
+    setPlannedWeeks((pw) => pw.filter((_, i) => i !== wi));
+
   const clearExample = async () => {
     setLibrary([]);
     setWeeks([]);
+    setPlannedWeeks([]);
     setTab("library");
   };
 
@@ -654,8 +685,7 @@ export default function DinnerForecast() {
 
               {confirmed && (
                 <div className="confirmed-note">
-                  Logged as last week — older weeks pushed down, now planning the week of{" "}
-                  {fmtDM(weekStart)}.
+                  Week locked in — now planning the week of {fmtDM(weekStart)}.
                 </div>
               )}
 
@@ -878,6 +908,116 @@ export default function DinnerForecast() {
           {hasData && (
             <>
               <div className="sec-head">
+                <h2>Upcoming</h2>
+                {!showPlanNext && (
+                  <button className="btn ghost" onClick={() => setShowPlanNext(true)}>
+                    <Plus size={15} /> Plan a week
+                  </button>
+                )}
+              </div>
+              <p className="note">
+                Weeks locked in ahead of time. The Forecast tab always shows the next unplanned week.
+              </p>
+
+              {showPlanNext && (
+                <div className="retro-confirm">
+                  <div className="retro-range">
+                    {plan.length ? `${fmt(plan[0].date)} – ${fmt(plan[plan.length - 1].date)}` : ""}
+                  </div>
+                  <ol className="retro-list">
+                    {plan.map((d, i) => {
+                      const did = planNextOverrides[i] ?? d.mealId;
+                      return (
+                        <li key={i} className="retro-row">
+                          <div className="retro-day">
+                            <span className="dow">{DAY_FULL[d.dow]}</span>
+                            <span className="date">{fmtDM(d.date)}</span>
+                          </div>
+                          <select
+                            className="retro-select"
+                            value={did}
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              setPlanNextOverrides((o) => {
+                                const next = { ...o };
+                                if (v === d.mealId) delete next[i];
+                                else next[i] = v;
+                                return next;
+                              });
+                            }}
+                          >
+                            <option value="">—</option>
+                            {library.map((m) => (
+                              <option key={m.id} value={m.id}>{m.name}</option>
+                            ))}
+                          </select>
+                        </li>
+                      );
+                    })}
+                  </ol>
+                  <div className="retro-actions">
+                    <button className="btn cta" onClick={confirmPlanNext}>
+                      <Check size={15} /> Lock in week
+                    </button>
+                    <button
+                      className="btn ghost"
+                      onClick={() => { setShowPlanNext(false); setPlanNextOverrides({}); }}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {plannedWeeks.map((pw, wi) => {
+                const pwStart = new Date(pw.weekMonday + "T00:00:00");
+                const pwEnd = new Date(pwStart);
+                pwEnd.setDate(pwEnd.getDate() + 6);
+                return (
+                  <div key={wi} className="planned-week">
+                    <div className="planned-week-head">
+                      <span className="retro-range">{fmt(pwStart)} – {fmt(pwEnd)}</span>
+                      <button
+                        className="icon-btn"
+                        onClick={() => removePlannedWeek(wi)}
+                        aria-label="Remove planned week"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                    <ol className="retro-list">
+                      {pw.meals.map((mealId, di) => {
+                        const d = new Date(pwStart);
+                        d.setDate(d.getDate() + di);
+                        return (
+                          <li key={di} className="retro-row">
+                            <div className="retro-day">
+                              <span className="dow">{DAY_FULL[di]}</span>
+                              <span className="date">{fmtDM(d)}</span>
+                            </div>
+                            <select
+                              className="retro-select"
+                              value={mealId}
+                              onChange={(e) => setPlannedCell(wi, di, e.target.value)}
+                            >
+                              <option value="">—</option>
+                              {library.map((m) => (
+                                <option key={m.id} value={m.id}>{m.name}</option>
+                              ))}
+                            </select>
+                          </li>
+                        );
+                      })}
+                    </ol>
+                  </div>
+                );
+              })}
+
+              {!plannedWeeks.length && !showPlanNext && (
+                <p className="muted pad">No weeks planned ahead yet.</p>
+              )}
+
+              <div className="sec-head mt">
                 <h2>Log last week</h2>
                 {!showRetroConfirm && (
                   <button className="btn" onClick={() => setShowRetroConfirm(true)}>
@@ -1357,6 +1497,10 @@ const CSS = `
 .wk-label{font-family:'Space Mono',monospace;font-size:10.5px;color:var(--ink-soft);white-space:nowrap;padding-left:9px!important;text-align:left!important;}
 .grid select{font-family:'Inter',sans-serif;font-size:11.5px;max-width:88px;width:100%;padding:5px 4px;border:1px solid var(--line);border-radius:2px;background:var(--paper);color:var(--ink);}
 .mt{margin-top:18px;}
+
+/* ---- planned (upcoming) weeks ---- */
+.planned-week{border:1px solid var(--line);border-radius:4px;background:var(--card);padding:14px 14px 10px;margin-bottom:12px;}
+.planned-week-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;}
 
 /* ---- retro confirm (log last week) ---- */
 .retro-confirm{border:1px solid var(--line);border-radius:4px;background:var(--card);padding:14px 14px 10px;margin-bottom:4px;}
