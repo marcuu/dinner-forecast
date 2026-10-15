@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useMemo, useCallback } from "react";
-import { Dices, Plus, Trash2, ChevronLeft, ChevronRight, Check, Sparkles, Lock, ShoppingBasket, MoreHorizontal } from "lucide-react";
+import { Dices, Plus, Trash2, ChevronLeft, ChevronRight, Check, Sparkles, Lock, ShoppingBasket, MoreHorizontal, X } from "lucide-react";
 
 /* Ocado has no public API: we deep-link into its search or a product page the household has linked. */
 const OCADO_SEARCH = (term) => `https://www.ocado.com/search?q=${encodeURIComponent(term)}`;
@@ -657,7 +657,12 @@ export default function DinnerForecast() {
   const suggestIngredients = async (m) => {
     setSuggesting(m.id);
     const ai = await aiIngredients(m.name);
-    updateMeal(m.id, { ingredients: ai || guessIngredients(m.name) });
+    const found = ai || guessIngredients(m.name);
+    // add what's missing; never throw away what's already been typed
+    const have = new Set((m.ingredients || []).map(ingKey));
+    const merged = [...(m.ingredients || [])];
+    found.forEach((x) => { const v = x.trim().toLowerCase(); if (v && !have.has(ingKey(v))) { merged.push(v); have.add(ingKey(v)); } });
+    updateMeal(m.id, { ingredients: merged });
     setSuggesting(null);
   };
 
@@ -1152,6 +1157,12 @@ export default function DinnerForecast() {
             Tap a dinner to change its tags or ingredients. Tags keep the week varied; ingredients make the shop.
           </p>
 
+          <datalist id="known-ings">
+            {[...new Set(library.flatMap((m) => (m.ingredients || []).map((x) => x.trim().toLowerCase())))].sort().map((x) => (
+              <option key={x} value={x} />
+            ))}
+          </datalist>
+
           <div className="add-row">
             <input
               value={newMeal}
@@ -1221,31 +1232,12 @@ export default function DinnerForecast() {
                         treat
                       </Toggle>
                     </div>
-                    <label className="ings-edit">
-                      <span className="ings-edit-top">
-                        Major ingredients
-                        <button
-                          type="button"
-                          className="suggest-btn"
-                          disabled={suggesting === m.id}
-                          onClick={() => suggestIngredients(m)}
-                        >
-                          <Sparkles size={12} /> {suggesting === m.id ? "Suggesting…" : "Suggest"}
-                        </button>
-                      </span>
-                      <input
-                        value={(m.ingredients || []).join(", ")}
-                        placeholder="e.g. chicken, peppers, rice"
-                        onChange={(e) =>
-                          updateMeal(m.id, {
-                            ingredients: e.target.value
-                              .split(",")
-                              .map((s) => s.trim())
-                              .filter(Boolean),
-                          })
-                        }
-                      />
-                    </label>
+                    <IngredientEditor
+                      value={m.ingredients || []}
+                      onChange={(ingredients) => updateMeal(m.id, { ingredients })}
+                      onSuggest={() => suggestIngredients(m)}
+                      suggesting={suggesting === m.id}
+                    />
                   </div>
                 )}
               </li>
@@ -1317,6 +1309,61 @@ function Slider({ label, hint, min, max, step, value, onChange, fmt }) {
         onChange={(e) => onChange(parseFloat(e.target.value))}
       />
       <div className="slider-hint">{hint}</div>
+    </div>
+  );
+}
+
+/* ingredients as chips: type one (several words are fine), Enter or comma adds it,
+   Backspace on an empty field removes the last; suggestions come from every meal so names stay consistent */
+function IngredientEditor({ value, onChange, onSuggest, suggesting }) {
+  const [draft, setDraft] = useState("");
+  const add = (raw) => {
+    const parts = raw.split(",").map((x) => x.trim().toLowerCase()).filter(Boolean);
+    if (!parts.length) { setDraft(""); return; }
+    const have = new Set(value.map(ingKey));
+    const next = [...value];
+    parts.forEach((x) => { if (!have.has(ingKey(x))) { next.push(x); have.add(ingKey(x)); } });
+    onChange(next);
+    setDraft("");
+  };
+  const remove = (i) => onChange(value.filter((_, j) => j !== i));
+  return (
+    <div className="ingEd">
+      <div className="ingEdTop">
+        <span>Ingredients</span>
+        <button type="button" className="suggest-btn" disabled={suggesting} onClick={onSuggest}>
+          <Sparkles size={12} /> {suggesting ? "Suggesting…" : "Suggest"}
+        </button>
+      </div>
+      {value.length > 0 ? (
+        <ul className="ingChips">
+          {value.map((x, i) => (
+            <li key={x + i}>
+              <span>{x}</span>
+              <button type="button" aria-label={`Remove ${x}`} onClick={() => remove(i)}>
+                <X size={13} />
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="ingEmpty">None yet. Add them below, or tap Suggest.</p>
+      )}
+      <div className="ingAdd">
+        <input
+          list="known-ings"
+          value={draft}
+          placeholder="Add an ingredient"
+          enterKeyHint="done"
+          aria-label="Add an ingredient"
+          onChange={(e) => { const v = e.target.value; if (v.includes(",")) add(v); else setDraft(v); }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") { e.preventDefault(); add(draft); }
+            else if (e.key === "Backspace" && !draft && value.length) remove(value.length - 1);
+          }}
+        />
+        <button type="button" className="btn small" disabled={!draft.trim()} onClick={() => add(draft)}>Add</button>
+      </div>
     </div>
   );
 }
@@ -1510,7 +1557,16 @@ details.group[open] > summary .chev{transform:rotate(90deg);}
 .toggles{display:flex;flex-wrap:wrap;gap:6px;}
 .toggle{border:0;border-radius:999px;padding:6px 12px;font-size:13px;font-weight:600;background:var(--fill2);color:var(--label2);cursor:pointer;}
 .toggle.on{background:var(--tint);color:var(--onTint);}
-.ings-edit-top{display:flex;justify-content:space-between;align-items:center;}
+.ingEd{display:grid;gap:8px;}
+.ingEdTop{display:flex;justify-content:space-between;align-items:center;font-size:13px;color:var(--label2);}
+.ingChips{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:6px;}
+.ingChips li{display:inline-flex;align-items:center;gap:2px;padding:5px 4px 5px 12px;border-radius:999px;background:var(--fill2);font-size:15px;line-height:20px;}
+.ingChips button{border:0;background:transparent;color:var(--label2);width:26px;height:26px;border-radius:999px;display:grid;place-items:center;cursor:pointer;}
+.ingChips button:hover{background:var(--fill);color:var(--label);}
+.ingEmpty{margin:0;font-size:13px;color:var(--label2);}
+.ingAdd{display:flex;gap:8px;}
+.ingAdd input::-webkit-calendar-picker-indicator{display:none !important;}
+.ingAdd input{flex:1;min-width:0;font-size:16px;padding:9px 12px;border-radius:10px;border:0;background:var(--fill2);color:var(--label);}
 .suggest-btn{display:inline-flex;align-items:center;gap:4px;border:0;background:none;color:var(--tintText);font-size:13px;font-weight:600;cursor:pointer;}
 .empty{background:var(--bg2);border-radius:26px;padding:28px 20px;display:grid;gap:14px;justify-items:start;}
 .empty p{margin:0;color:var(--label2);}
