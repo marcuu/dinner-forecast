@@ -1,7 +1,16 @@
 "use client";
 
 import React, { useState, useEffect, useMemo, useCallback } from "react";
-import { Dices, Plus, Trash2, ChevronDown, ChevronRight, ListChecks, Check, Sparkles, Lock, LockOpen } from "lucide-react";
+import { Dices, Plus, Trash2, ChevronDown, ChevronRight, Check, Sparkles, Lock, LockOpen, ShoppingBasket, Link2, Undo2, Package } from "lucide-react";
+
+/* Ocado has no public API: we deep-link into its search or a product page the household has linked. */
+const OCADO_SEARCH = (term) => `https://www.ocado.com/search?q=${encodeURIComponent(term)}`;
+const OCADO_PRODUCT = /^https:\/\/(www\.)?ocado\.com\/products\/[^\s]+$/i;
+/* "onions" and "onion" are the same thing to buy */
+const singular = (w) => (w.length > 4 && w.endsWith("oes") ? w.slice(0, -2) : w.length > 3 && w.endsWith("s") && !w.endsWith("ss") ? w.slice(0, -1) : w);
+const ingKey = (s) => s.trim().toLowerCase().replace(/\s+/g, " ").split(" ").map(singular).join(" ");
+/* cupboard basics start in the cupboard check; one tap moves any of them back to the list */
+const LIKELY_STAPLE = /\b(oil|salt|black pepper|spices?|seasoning|paprika|cumin|herbs?|stock|gravy|flour|sugar|vinegar|soy sauce|garlic|rice|pasta)\b/;
 import { loadState, saveState } from "../lib/store";
 
 /* ------------------------------------------------------------------ *
@@ -413,6 +422,10 @@ export default function DinnerForecast() {
   const [plannedWeeks, setPlannedWeeks] = useState([]); // { weekMonday: "YYYY-MM-DD", meals: [7 ids] }[]
   const [showPlanNext, setShowPlanNext] = useState(false);
   const [planNextOverrides, setPlanNextOverrides] = useState({});
+  const [products, setProducts] = useState({}); // ingredient key -> { url?: Ocado product link, staple?: true }
+  const [shop, setShop] = useState({ week: "", ticked: [] }); // what's already in the Ocado basket this week
+  const [linking, setLinking] = useState(null); // ingredient key being linked to an Ocado product
+  const [linkDraft, setLinkDraft] = useState("");
 
   const today = useMemo(() => new Date(), []);
   const weekStart = useMemo(() => mondayOfWeek(today, plannedWeeks.length), [today, plannedWeeks.length]);
@@ -437,6 +450,8 @@ export default function DinnerForecast() {
         setWeeks(hist);
         setPlannedWeeks(remaining);
         if (st.params) setParams((p) => ({ ...p, ...st.params }));
+        if (st.products && typeof st.products === "object") setProducts(st.products);
+        if (st.shop && Array.isArray(st.shop.ticked)) setShop(st.shop);
       } else if (!(st && st.cleared)) {
         const { lib: el, weeks: ew } = seedData();
         setLibrary(el);
@@ -453,11 +468,11 @@ export default function DinnerForecast() {
     if (!loaded) return;
     setSaveStatus("saving");
     const t = setTimeout(async () => {
-      const ok = await saveState({ library, weeks, params, plannedWeeks, cleared: library.length === 0 });
+      const ok = await saveState({ library, weeks, params, plannedWeeks, products, shop, cleared: library.length === 0 });
       setSaveStatus(ok ? "saved" : "error");
     }, 600);
     return () => clearTimeout(t);
-  }, [library, weeks, params, plannedWeeks, loaded]);
+  }, [library, weeks, params, plannedWeeks, products, shop, loaded]);
 
   // meals pinned by the user — passed to the engine so anti-repetition stays correct
   const fixedMeals = useMemo(() => {
@@ -480,22 +495,61 @@ export default function DinnerForecast() {
   const byId = useMemo(() => Object.fromEntries(library.map((m) => [m.id, m])), [library]);
 
 
-  /* deduped shopping list across the 7 forecast dinners (respecting swaps) */
-  const shoppingList = useMemo(() => {
-    const seen = new Set();
-    const out = [];
+  /* the week's ingredients, deduplicated, with which nights need them and how to find them on Ocado */
+  const weekKey = useMemo(() => weekStart.toISOString().split("T")[0], [weekStart]);
+  const ticked = useMemo(() => new Set(shop.week === weekKey ? shop.ticked : []), [shop, weekKey]);
+  const basket = useMemo(() => {
+    const map = new Map();
     plan.forEach((d, i) => {
       const m = byId[overrides[i] ?? d.mealId];
-      (m?.ingredients || []).forEach((ing) => {
-        const k = ing.trim().toLowerCase();
-        if (k && !seen.has(k)) {
-          seen.add(k);
-          out.push(ing.trim());
-        }
+      if (!m || m.isSkip) return;
+      (m.ingredients || []).forEach((ing) => {
+        const k = ingKey(ing);
+        if (!k) return;
+        if (!map.has(k)) map.set(k, { key: k, label: ing.trim(), days: [] });
+        const it = map.get(k);
+        if (!it.days.includes(i)) it.days.push(i);
       });
     });
-    return out;
-  }, [plan, overrides, byId]);
+    return [...map.values()].map((it) => {
+      const p = products[it.key] || {};
+      const staple = p.staple ?? LIKELY_STAPLE.test(it.key);
+      return { ...it, url: p.url || "", staple, href: p.url || OCADO_SEARCH(it.label), got: ticked.has(it.key) };
+    });
+  }, [plan, overrides, byId, products, ticked]);
+  const toBuy = basket.filter((x) => !x.staple);
+  const cupboard = basket.filter((x) => x.staple);
+  const nextToAdd = toBuy.find((x) => !x.got);
+  const shoppingList = toBuy.map((x) => x.label);
+
+  const setTick = useCallback((k, on) => {
+    setShop((sh) => {
+      const cur = new Set(sh.week === weekKey ? sh.ticked : []);
+      on ? cur.add(k) : cur.delete(k);
+      return { week: weekKey, ticked: [...cur] };
+    });
+  }, [weekKey]);
+  const setProduct = (k, patch) =>
+    setProducts((P) => {
+      const n = { ...(P[k] || {}), ...patch };
+      Object.keys(n).forEach((f) => (n[f] === undefined || n[f] === "") && delete n[f]); // keep staple:false, it overrides the default
+      const out = { ...P };
+      if (Object.keys(n).length) out[k] = n; else delete out[k];
+      return out;
+    });
+  /* one tap per item: open it in the same Ocado tab and tick it off */
+  const openNext = () => {
+    if (!nextToAdd) return;
+    window.open(nextToAdd.href, "ocado");
+    setTick(nextToAdd.key, true);
+  };
+  const saveLink = (k) => {
+    const v = linkDraft.trim();
+    if (v && !OCADO_PRODUCT.test(v.split("?")[0])) return;
+    setProduct(k, { url: v ? v.split("?")[0] : "" });
+    setLinking(null);
+    setLinkDraft("");
+  };
 
   const copyList = useCallback(async () => {
     const text = shoppingList.map((x) => `- ${x}`).join("\n");
@@ -504,7 +558,7 @@ export default function DinnerForecast() {
       setCopied(true);
       setTimeout(() => setCopied(false), 1800);
     } catch {
-      setCopied(false); // fall back to the selectable textarea
+      setCopied(false);
     }
   }, [shoppingList]);
 
@@ -515,6 +569,7 @@ export default function DinnerForecast() {
     const weekMonday = weekStart.toISOString().split("T")[0];
     const meals = plan.map((d, i) => overrides[i] ?? d.mealId);
     setPlannedWeeks((pw) => [...pw, { weekMonday, meals }]);
+    setShop({ week: "", ticked: [] });
     setOpenDay(null);
     setOverrides({});
     setLockedDays({});
@@ -675,7 +730,7 @@ export default function DinnerForecast() {
                     <Dices size={15} /> Re-roll
                   </button>
                   <button className="btn ghost" onClick={() => setShoppingOpen((s) => !s)}>
-                    <ListChecks size={15} /> Shopping list
+                    <ShoppingBasket size={15} /> Ocado basket
                   </button>
                 </div>
               </div>
@@ -692,21 +747,109 @@ export default function DinnerForecast() {
               {shoppingOpen && (
                 <div className="shopping">
                   <div className="shopping-head">
-                    <span>{shoppingList.length} ingredients across the week</span>
+                    <span>
+                      {toBuy.length === 0
+                        ? "Nothing to buy for these dinners"
+                        : `${toBuy.filter((x) => x.got).length} of ${toBuy.length} in your basket`}
+                    </span>
                     <button className="btn small" onClick={copyList}>
-                      {copied ? "Copied ✓" : "Copy"}
+                      {copied ? "Copied ✓" : "Copy list"}
                     </button>
                   </div>
-                  <textarea
-                    className="shopping-text"
-                    readOnly
-                    rows={Math.min(16, Math.max(4, shoppingList.length))}
-                    value={shoppingList.map((x) => `- ${x}`).join("\n")}
-                    onFocus={(e) => e.target.select()}
-                  />
+
+                  {toBuy.length > 0 && (
+                    <div className="basket-bar">
+                      <div className="basket-meter" aria-hidden="true">
+                        <i style={{ width: `${(toBuy.filter((x) => x.got).length / toBuy.length) * 100}%` }} />
+                      </div>
+                      {nextToAdd ? (
+                        <button className="btn cta ocado-next" onClick={openNext}>
+                          <ShoppingBasket size={15} /> Next on Ocado: {nextToAdd.label}
+                        </button>
+                      ) : (
+                        <div className="basket-done">Everything&rsquo;s in the basket. Book a slot on Ocado and you&rsquo;re done.</div>
+                      )}
+                    </div>
+                  )}
+
+                  <ul className="basket">
+                    {toBuy.map((it) => (
+                      <li key={it.key} className={it.got ? "got" : ""}>
+                        <button
+                          className="b-tick"
+                          aria-pressed={it.got}
+                          aria-label={`${it.label}: ${it.got ? "in basket" : "not in basket"}`}
+                          onClick={() => setTick(it.key, !it.got)}
+                        >
+                          {it.got && <Check size={13} />}
+                        </button>
+                        <div className="b-main">
+                          <a className="b-name" href={it.href} target="ocado" rel="noopener noreferrer" onClick={() => setTick(it.key, true)}>
+                            {it.label}
+                          </a>
+                          <span className="b-meta">
+                            {it.days.map((d) => DAY_FULL[d].slice(0, 3)).join(", ")}
+                            {it.url ? ". Your usual product" : ". Opens a search"}
+                          </span>
+                          {linking === it.key && (
+                            <div className="b-link-edit">
+                              <input
+                                autoFocus
+                                placeholder="Paste an ocado.com/products/… link"
+                                value={linkDraft}
+                                onChange={(e) => setLinkDraft(e.target.value)}
+                                onKeyDown={(e) => e.key === "Enter" && saveLink(it.key)}
+                              />
+                              <button className="btn small" onClick={() => saveLink(it.key)}>Save</button>
+                              {linkDraft.trim() && !OCADO_PRODUCT.test(linkDraft.trim().split("?")[0]) && (
+                                <span className="b-err">That isn&rsquo;t an Ocado product link.</span>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                        <button
+                          className="b-icon"
+                          title={it.url ? "Change the Ocado product" : "Link your usual Ocado product"}
+                          aria-label={it.url ? `Change the Ocado product for ${it.label}` : `Link your usual Ocado product for ${it.label}`}
+                          onClick={() => { setLinking(linking === it.key ? null : it.key); setLinkDraft(it.url); }}
+                        >
+                          <Link2 size={15} />
+                        </button>
+                        <button
+                          className="b-icon"
+                          title="We always have this"
+                          aria-label={`We always have ${it.label}`}
+                          onClick={() => setProduct(it.key, { staple: true })}
+                        >
+                          <Package size={15} />
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+
+                  {cupboard.length > 0 && (
+                    <details className="cupboard">
+                      <summary>Check the cupboard ({cupboard.length})</summary>
+                      <ul className="basket">
+                        {cupboard.map((it) => (
+                          <li key={it.key}>
+                            <div className="b-main">
+                              <span className="b-name plain">{it.label}</span>
+                              <span className="b-meta">{it.days.map((d) => DAY_FULL[d].slice(0, 3)).join(", ")}</span>
+                            </div>
+                            <button className="b-icon" title="Add back to the list" aria-label={`Add ${it.label} back to the list`} onClick={() => setProduct(it.key, { staple: false })}>
+                              <Undo2 size={15} />
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    </details>
+                  )}
+
                   <div className="shopping-note">
-                    Deduplicated across all seven dinners, reflecting any swaps. Tap Copy, or tap the
-                    box to select all.
+                    Ocado doesn&rsquo;t let other apps fill your basket, so each item opens Ocado for you to add.
+                    Link your usual product once (<Link2 size={11} />) and it opens straight to it from then on.
+                    Mark things you always have (<Package size={11} />) and they move to the cupboard check.
                   </div>
                 </div>
               )}
@@ -1422,7 +1565,30 @@ const CSS = `
 .shopping{border:1px solid var(--line);border-radius:4px;background:var(--card);padding:12px;margin-bottom:14px;}
 .shopping-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:9px;font-size:12.5px;color:var(--ink-soft);}
 .shopping-text{width:100%;font-family:'Space Mono',monospace;font-size:12.5px;line-height:1.55;color:var(--ink);background:var(--paper);border:1px solid var(--line);border-radius:3px;padding:9px 11px;resize:vertical;}
-.shopping-note{font-size:11.5px;color:var(--ink-soft);margin-top:7px;}
+.shopping-note{font-size:11.5px;color:var(--ink-soft);margin-top:10px;line-height:1.5;}
+.shopping-note svg{vertical-align:-1px;}
+.basket-bar{display:grid;gap:10px;margin:4px 0 12px;}
+.basket-meter{height:6px;border-radius:3px;background:var(--line);overflow:hidden;}
+.basket-meter i{display:block;height:100%;background:var(--sage);transition:width .25s;}
+.ocado-next{justify-content:center;width:100%;font-size:14px;padding:11px 14px;}
+.basket-done{font-family:'Fraunces',serif;font-size:16px;color:var(--ink);padding:4px 0;}
+.basket{list-style:none;margin:0;padding:0;border-top:1px solid var(--line);}
+.basket li{display:flex;align-items:flex-start;gap:10px;padding:10px 2px;border-bottom:1px solid var(--line);}
+.basket li.got .b-name{color:var(--ink-soft);text-decoration:line-through;text-decoration-color:var(--line);}
+.b-tick{flex:none;width:22px;height:22px;margin-top:1px;border-radius:50%;border:1.5px solid var(--sage);background:transparent;color:var(--paper);display:grid;place-items:center;cursor:pointer;padding:0;}
+.b-tick[aria-pressed="true"]{background:var(--sage);}
+.b-main{flex:1;min-width:0;display:grid;gap:2px;}
+.b-name{font-size:15px;font-weight:500;color:var(--ink);text-decoration:none;}
+.b-name:hover{color:var(--amber);}
+.b-name.plain:hover{color:var(--ink);}
+.b-meta{font-size:11.5px;color:var(--ink-soft);}
+.b-icon{flex:none;width:32px;height:32px;border:0;background:transparent;color:var(--ink-soft);border-radius:4px;display:grid;place-items:center;cursor:pointer;}
+.b-icon:hover{background:var(--paper);color:var(--ink);}
+.b-link-edit{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:6px;}
+.b-link-edit input{flex:1 1 220px;min-width:0;font:inherit;font-size:13px;padding:7px 9px;border:1px solid var(--line);border-radius:3px;background:var(--paper);color:var(--ink);}
+.b-err{font-size:11.5px;color:var(--clay);flex-basis:100%;}
+.cupboard{margin-top:12px;}
+.cupboard summary{cursor:pointer;font-size:12.5px;color:var(--ink-soft);padding:4px 0;}
 
 /* ---- swap + ingredients in the expanded day ---- */
 .swap-row{display:flex;align-items:center;gap:9px;margin:2px 0 12px;}
