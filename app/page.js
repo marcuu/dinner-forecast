@@ -689,7 +689,7 @@ export default function DinnerForecast() {
   const TITLE = { forecast: "This week", shop: "Shop", history: "History", library: "Meals" };
   const SUB = {
     forecast: range,
-    shop: toBuy.length ? `${inBasket} of ${toBuy.length} in your Ocado basket` : range,
+    shop: plan.length ? `For dinners ${fmt(plan[0].date)} to ${fmt(plan[plan.length - 1].date)}` : "",
     history: "What you actually ate. The forecast learns from it.",
     library: `${library.length} dinners`,
   };
@@ -740,7 +740,6 @@ export default function DinnerForecast() {
                 {plan.map((d, i) => {
                   const did = overrides[i] ?? d.mealId;
                   const meal = byId[did];
-                  const swapped = overrides[i] != null && overrides[i] !== d.mealId;
                   const open = openDay === i;
                   return (
                     <li key={i} className={open ? "open" : ""}>
@@ -751,9 +750,6 @@ export default function DinnerForecast() {
                         </span>
                         <span className="lab">
                           <span className="meal">{meal ? meal.name : "Nothing planned"}</span>
-                          <span className="sub">
-                            {lockedDays[i] ? "Kept when you re-roll" : swapped ? "Your pick" : d.rationale}
-                          </span>
                         </span>
                         {lockedDays[i] && <Lock size={14} className="lockIc" aria-label="Kept" />}
                         <ChevronRight size={16} className="chev" />
@@ -844,7 +840,10 @@ export default function DinnerForecast() {
             <p className="gf">Nothing to buy for this week&rsquo;s dinners.</p>
           ) : (
             <>
-              <div className="meter" aria-hidden="true"><i style={{ width: `${(inBasket / toBuy.length) * 100}%` }} /></div>
+              <div className="meterRow">
+                <span>{inBasket} of {toBuy.length} in your Ocado basket</span>
+                <div className="meter" aria-hidden="true"><i style={{ width: `${(inBasket / toBuy.length) * 100}%` }} /></div>
+              </div>
               {nextToAdd ? (
                 <button className="btn primary wide" onClick={openNext}>
                   <ShoppingBasket size={17} /> Next on Ocado: {nextToAdd.label}
@@ -1387,6 +1386,7 @@ const CSS = `
 .wrap{max-width:720px;margin:0 auto;padding:12px 16px calc(env(safe-area-inset-bottom,0px) + 120px);}
 @media (min-width:900px){.wrap{padding-top:88px;padding-bottom:64px;}}
 .head{display:grid;gap:2px;padding:8px 4px 16px;}
+.head .footnote{font-size:15px;line-height:20px;}
 .largeTitle{font-family:var(--fd);font-size:34px;line-height:41px;font-weight:700;letter-spacing:.01em;margin:0;}
 .footnote{font-size:13px;line-height:18px;color:var(--label2);margin:0;}
 .save-status.error{color:var(--redText);}
@@ -1463,7 +1463,8 @@ details.group[open] > summary .chev{transform:rotate(90deg);}
 .slider-hint{font-size:13px;line-height:18px;color:var(--label2);}
 
 /* Shop */
-.meter{height:6px;border-radius:999px;background:var(--fill);overflow:hidden;margin:0 4px;}
+.meterRow{display:grid;gap:6px;padding:0 4px;font-size:13px;line-height:18px;color:var(--label2);}
+.meter{height:6px;border-radius:999px;background:var(--fill);overflow:hidden;}
 .meter i{display:block;height:100%;background:var(--moss);border-radius:999px;transition:width .3s;}
 .tick{flex:none;width:26px;height:26px;border-radius:999px;border:2px solid var(--label3);background:transparent;color:transparent;display:grid;place-items:center;cursor:pointer;padding:0;transition:background .18s,border-color .18s;}
 .tick[aria-pressed="true"]{background:var(--moss);border-color:var(--moss);color:#fff;}
