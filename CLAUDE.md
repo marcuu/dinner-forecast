@@ -101,6 +101,10 @@ row id `"default"`:
 - `weeks` — array of weeks, newest first; each week is 7 meal ids (Mon→Sun),
   empty string for a blank cell
 - `params` — the four model params above
+- `products` — per ingredient key: `{ url?: Ocado product link, staple?: bool }`
+  (staple defaults from `LIKELY_STAPLE`; an explicit `false` overrides it)
+- `shop` — `{ week: "YYYY-MM-DD", ticked: [ingredient keys] }`, what's already
+  in the Ocado basket for the planned week; reset on Confirm week
 - `cleared` — flag so a deliberately emptied dataset isn't re-seeded
 
 Meal tags are auto-guessed from the name by `autoTag` on add, and drive the
@@ -127,13 +131,21 @@ weeks of synthetic history.
 - **`"use client"`** at the top of `app/page.js`; `layout.js` stays a server
   component.
 - **All styling lives in the `CSS` template string** at the bottom of
-  `app/page.js`, scoped under `.dfc`. Use the existing CSS variables (`--ink`,
-  `--paper`, `--amber`, `--sage`, etc.) and the established fonts (Fraunces,
-  Inter, Space Mono). Don't introduce a CSS framework.
+  `app/page.js`, scoped under `.dfc`. The look matches Marcus's FIRE app: Apple
+  HIG, system fonts (SF), grouped background with inset lists, large titles, one
+  floating glass tab bar (This week, Shop, History, Meals), light and dark mode.
+  Use the existing CSS variables (`--bg`, `--bg2`, `--label`, `--label2`, `--sep`,
+  `--tint`, `--moss`, `--salmon`, etc.). Don't introduce a CSS framework or web fonts.
 - **Absolute-ish imports** are not configured beyond `baseUrl: "."`; existing
   code uses relative imports (`../lib/store`). Match that.
 - **British English** in user-facing copy (en-GB dates, "chilli", "lasagne").
 - Keep the app a single shared dataset — there is no per-user auth.
+
+## Ocado
+
+Ocado has no public API. The Shop tab deep-links each ingredient to a linked
+product page or `OCADO_SEARCH(term)`, reusing one browser tab named `ocado`.
+"Next on Ocado" opens the next unticked item and ticks it.
 
 ## Supabase / security notes
 

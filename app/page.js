@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useMemo, useCallback } from "react";
-import { Dices, Plus, Trash2, ChevronDown, ChevronRight, Check, Sparkles, Lock, LockOpen, ShoppingBasket, Link2, Undo2, Package } from "lucide-react";
+import { Dices, Plus, Trash2, ChevronRight, Check, Sparkles, Lock, ShoppingBasket, CalendarDays, History as HistoryIcon, UtensilsCrossed, MoreHorizontal } from "lucide-react";
 
 /* Ocado has no public API: we deep-link into its search or a product page the household has linked. */
 const OCADO_SEARCH = (term) => `https://www.ocado.com/search?q=${encodeURIComponent(term)}`;
@@ -279,13 +279,13 @@ function generatePlan(library, weeks, params, seed, startDate, lockedMeals = {})
       .slice(0, 4);
 
     let rationale;
-    if (chosen.isSkip) rationale = "Skip night — leftovers, out, or fend for yourself";
-    else if (cold) rationale = "Cold start — add week history to make this a real forecast";
-    else if (exploring) rationale = "Exploration pick — widening the rotation";
-    else if (fellBack) rationale = `No ${DAY_FULL[dow]} history yet — drawn from your overall rotation`;
+    if (chosen.isSkip) rationale = "Night off: leftovers, eating out, or fend for yourself";
+    else if (cold) rationale = "A shuffle until there's some history to learn from";
+    else if (exploring) rationale = "Something you've not had lately";
+    else if (fellBack) rationale = `No ${DAY_FULL[dow]} history yet, so picked from your usual dinners`;
     else if (rawCount[chosenId])
       rationale = `${rawCount[chosenId]} of the last ${weeksWithData} ${DAY_FULL[dow]}${weeksWithData === 1 ? "" : "s"}`;
-    else rationale = "Variety pick — recent repeats steered the model elsewhere";
+    else rationale = "Picked for variety";
 
     const tilt = [];
     if (!exploring && !cold && !chosen.isSkip && nudge > 0.02) {
@@ -411,7 +411,6 @@ export default function DinnerForecast() {
   const [newMeal, setNewMeal] = useState("");
   const [overrides, setOverrides] = useState({}); // dayIndex -> mealId (manual swap)
   const [lockedDays, setLockedDays] = useState({}); // dayIndex -> true (survives re-roll)
-  const [shoppingOpen, setShoppingOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
   const [suggesting, setSuggesting] = useState(null); // meal id currently fetching ingredients
@@ -661,388 +660,282 @@ export default function DinnerForecast() {
 
   const hasData = library.length > 0;
 
+  const inBasket = toBuy.filter((x) => x.got).length;
+  const reroll = () => {
+    setOverrides((o) => {
+      const next = {};
+      Object.keys(lockedDays).forEach((k) => {
+        const i = parseInt(k);
+        if (o[i] !== undefined) next[i] = o[i];
+      });
+      return next;
+    });
+    setSeed((s) => s + 1);
+  };
+  const swapTo = (i, d, id) =>
+    setOverrides((o) => {
+      const n = { ...o };
+      if (id === d.mealId) delete n[i];
+      else n[i] = id;
+      return n;
+    });
+  const range = plan.length ? `${fmt(plan[0].date)} to ${fmt(plan[plan.length - 1].date)}` : "";
+  const TABS = [
+    ["forecast", "This week", <CalendarDays key="i" size={22} />],
+    ["shop", "Shop", <ShoppingBasket key="i" size={22} />],
+    ["history", "History", <HistoryIcon key="i" size={22} />],
+    ["library", "Meals", <UtensilsCrossed key="i" size={22} />],
+  ];
+  const TITLE = { forecast: "This week", shop: "Shop", history: "History", library: "Meals" };
+  const SUB = {
+    forecast: range,
+    shop: toBuy.length ? `${inBasket} of ${toBuy.length} in your Ocado basket` : range,
+    history: "What you actually ate. The forecast learns from it.",
+    library: `${library.length} dinners`,
+  };
+
   return (
     <div className="dfc">
       <style>{CSS}</style>
 
-      <header className="hd">
-        <div className="eyebrow">THE HOLME VALLEY ALMANAC</div>
-        <h1>Dinner Forecast</h1>
-
-      </header>
-
-      <nav className="tabs">
-        <button className={tab === "forecast" ? "tab on" : "tab"} onClick={() => setTab("forecast")}>
-          Forecast
-        </button>
-        <button className={tab === "history" ? "tab on" : "tab"} onClick={() => setTab("history")}>
-          History
-        </button>
-        <button className={tab === "library" ? "tab on" : "tab"} onClick={() => setTab("library")}>
-          Library
-        </button>
-        <span className={`save-status ${saveStatus}`}>
-          {saveStatus === "saving"
-            ? "Saving…"
-            : saveStatus === "saved"
-            ? "Saved ✓"
-            : saveStatus === "error"
-            ? "Couldn't save"
-            : ""}
-        </span>
+      <nav className="tabbar" role="tablist" aria-label="Sections">
+        {TABS.map(([k, label, icon]) => (
+          <button
+            key={k}
+            role="tab"
+            aria-selected={tab === k}
+            className="tab"
+            onClick={() => { setTab(k); setOpenDay(null); window.scrollTo(0, 0); }}
+          >
+            {icon}
+            <span>{label}</span>
+          </button>
+        ))}
       </nav>
+
+      <div className="wrap">
+        <header className="head">
+          <h1 className="largeTitle">{TITLE[tab]}</h1>
+          <p className="footnote">
+            {SUB[tab]}
+            {saveStatus === "error" && <span className="save-status error">. Couldn&rsquo;t save</span>}
+          </p>
+        </header>
 
       {tab === "forecast" && (
         <section className="panel">
           {!hasData ? (
             <div className="empty">
-              <p>No history to forecast from yet.</p>
-              <button className="btn" onClick={() => setTab("library")}>
-                Add your dinners
-              </button>
+              <p>Add the dinners you usually make, and the forecast starts from there.</p>
+              <button className="btn primary" onClick={() => setTab("library")}>Add dinners</button>
             </div>
           ) : (
             <>
-              <div className="panel-head">
-                <span className="range">
-                  {plan.length
-                    ? `${fmt(plan[0].date)} – ${fmt(plan[plan.length - 1].date)}`
-                    : ""}
-                </span>
-                <div className="head-actions">
-                  <button className="btn cta" onClick={confirmWeek}>
-                    <Check size={15} /> Confirm week
-                  </button>
-                  <button
-                    className="btn ghost"
-                    onClick={() => {
-                      setOverrides((o) => {
-                        const next = {};
-                        Object.keys(lockedDays).forEach((k) => {
-                          const i = parseInt(k);
-                          if (o[i] !== undefined) next[i] = o[i];
-                        });
-                        return next;
-                      });
-                      setSeed((s) => s + 1);
-                    }}
-                  >
-                    <Dices size={15} /> Re-roll
-                  </button>
-                  <button className="btn ghost" onClick={() => setShoppingOpen((s) => !s)}>
-                    <ShoppingBasket size={15} /> Ocado basket
-                  </button>
-                </div>
-              </div>
-              <p className="flywheel-hint">
-                Confirmed weeks sharpen the forecast.
-              </p>
-
-              {confirmed && (
-                <div className="confirmed-note">
-                  Week locked in — now planning the week of {fmtDM(weekStart)}.
-                </div>
-              )}
-
-              {shoppingOpen && (
-                <div className="shopping">
-                  <div className="shopping-head">
-                    <span>
-                      {toBuy.length === 0
-                        ? "Nothing to buy for these dinners"
-                        : `${toBuy.filter((x) => x.got).length} of ${toBuy.length} in your basket`}
-                    </span>
-                    <button className="btn small" onClick={copyList}>
-                      {copied ? "Copied ✓" : "Copy list"}
-                    </button>
-                  </div>
-
-                  {toBuy.length > 0 && (
-                    <div className="basket-bar">
-                      <div className="basket-meter" aria-hidden="true">
-                        <i style={{ width: `${(toBuy.filter((x) => x.got).length / toBuy.length) * 100}%` }} />
-                      </div>
-                      {nextToAdd ? (
-                        <button className="btn cta ocado-next" onClick={openNext}>
-                          <ShoppingBasket size={15} /> Next on Ocado: {nextToAdd.label}
-                        </button>
-                      ) : (
-                        <div className="basket-done">Everything&rsquo;s in the basket. Book a slot on Ocado and you&rsquo;re done.</div>
-                      )}
-                    </div>
-                  )}
-
-                  <ul className="basket">
-                    {toBuy.map((it) => (
-                      <li key={it.key} className={it.got ? "got" : ""}>
-                        <button
-                          className="b-tick"
-                          aria-pressed={it.got}
-                          aria-label={`${it.label}: ${it.got ? "in basket" : "not in basket"}`}
-                          onClick={() => setTick(it.key, !it.got)}
-                        >
-                          {it.got && <Check size={13} />}
-                        </button>
-                        <div className="b-main">
-                          <a className="b-name" href={it.href} target="ocado" rel="noopener noreferrer" onClick={() => setTick(it.key, true)}>
-                            {it.label}
-                          </a>
-                          <span className="b-meta">
-                            {it.days.map((d) => DAY_FULL[d].slice(0, 3)).join(", ")}
-                            {it.url ? ". Your usual product" : ". Opens a search"}
-                          </span>
-                          {linking === it.key && (
-                            <div className="b-link-edit">
-                              <input
-                                autoFocus
-                                placeholder="Paste an ocado.com/products/… link"
-                                value={linkDraft}
-                                onChange={(e) => setLinkDraft(e.target.value)}
-                                onKeyDown={(e) => e.key === "Enter" && saveLink(it.key)}
-                              />
-                              <button className="btn small" onClick={() => saveLink(it.key)}>Save</button>
-                              {linkDraft.trim() && !OCADO_PRODUCT.test(linkDraft.trim().split("?")[0]) && (
-                                <span className="b-err">That isn&rsquo;t an Ocado product link.</span>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                        <button
-                          className="b-icon"
-                          title={it.url ? "Change the Ocado product" : "Link your usual Ocado product"}
-                          aria-label={it.url ? `Change the Ocado product for ${it.label}` : `Link your usual Ocado product for ${it.label}`}
-                          onClick={() => { setLinking(linking === it.key ? null : it.key); setLinkDraft(it.url); }}
-                        >
-                          <Link2 size={15} />
-                        </button>
-                        <button
-                          className="b-icon"
-                          title="We always have this"
-                          aria-label={`We always have ${it.label}`}
-                          onClick={() => setProduct(it.key, { staple: true })}
-                        >
-                          <Package size={15} />
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-
-                  {cupboard.length > 0 && (
-                    <details className="cupboard">
-                      <summary>Check the cupboard ({cupboard.length})</summary>
-                      <ul className="basket">
-                        {cupboard.map((it) => (
-                          <li key={it.key}>
-                            <div className="b-main">
-                              <span className="b-name plain">{it.label}</span>
-                              <span className="b-meta">{it.days.map((d) => DAY_FULL[d].slice(0, 3)).join(", ")}</span>
-                            </div>
-                            <button className="b-icon" title="Add back to the list" aria-label={`Add ${it.label} back to the list`} onClick={() => setProduct(it.key, { staple: false })}>
-                              <Undo2 size={15} />
-                            </button>
-                          </li>
-                        ))}
-                      </ul>
-                    </details>
-                  )}
-
-                  <div className="shopping-note">
-                    Ocado doesn&rsquo;t let other apps fill your basket, so each item opens Ocado for you to add.
-                    Link your usual product once (<Link2 size={11} />) and it opens straight to it from then on.
-                    Mark things you always have (<Package size={11} />) and they move to the cupboard check.
-                  </div>
-                </div>
-              )}
-
+              {confirmed && <div className="banner">Week confirmed. Now planning the week of {fmtDM(weekStart)}.</div>}
               {weeks.length === 0 && (
-                <div className="cold-note">
-                  No week history yet — this is a shuffle of your library, not a forecast. Add some
-                  weeks under History.
-                </div>
+                <p className="gf">No history yet, so this is a shuffle of your meals. Log a few weeks under History.</p>
               )}
 
-              <ol className="ledger">
+              <ul className="list days">
                 {plan.map((d, i) => {
                   const did = overrides[i] ?? d.mealId;
                   const meal = byId[did];
                   const swapped = overrides[i] != null && overrides[i] !== d.mealId;
                   const open = openDay === i;
                   return (
-                    <li
-                      key={i}
-                      className={`row${d.exploring ? " explore" : ""}${d.skip ? " skip" : ""}${
-                        swapped ? " swapped" : ""
-                      }${lockedDays[i] ? " locked" : ""}`}
-                    >
-                      <div className="row-wrap">
-                        <button
-                          className={`lock-btn${lockedDays[i] ? " on" : ""}`}
-                          onClick={() => toggleLock(i)}
-                          aria-label={lockedDays[i] ? "Unlock this night" : "Lock this night"}
-                        >
-                          {lockedDays[i] ? <Lock size={13} /> : <LockOpen size={13} />}
-                        </button>
-                        <button className="row-main" onClick={() => setOpenDay(open ? null : i)}>
-                          <div className="row-day">
-                            <span className="dow">{DAY_FULL[d.dow]}</span>
-                            <span className="date">{fmtDM(d.date)}</span>
-                          </div>
-                          <div className="row-meal">
-                            <div className="meal-line">
-                              <span className="meal-name">{meal ? meal.name : "—"}</span>
-                              {d.locked ? (
-                                <span className="prob locked-prob">locked</span>
-                              ) : swapped ? (
-                                <span className="prob your">your pick</span>
-                              ) : (
-                                <span className="prob">{Math.round(d.prob * 100)}%</span>
-                              )}
-                            </div>
-                            <div className="bar">
-                              <span style={{ width: `${d.locked || swapped ? 100 : Math.max(4, d.prob * 100)}%` }} />
-                            </div>
-                            <div className="why">
-                              <span>{d.locked ? "Locked — survives re-roll" : swapped ? "Swapped in manually" : d.rationale}</span>
-                              {!swapped && !d.locked &&
-                                d.tilt.map((t) => (
-                                  <span key={t} className="tilt">
-                                    {t}
-                                  </span>
-                                ))}
-                            </div>
-                          </div>
-                          <span className="chev">{open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}</span>
-                        </button>
-                      </div>
+                    <li key={i} className={open ? "open" : ""}>
+                      <button className="li dayRow" aria-expanded={open} onClick={() => setOpenDay(open ? null : i)}>
+                        <span className="dayCol">
+                          <b>{DAY_FULL[d.dow].slice(0, 3)}</b>
+                          <small>{d.date.getDate()}</small>
+                        </span>
+                        <span className="lab">
+                          <span className="meal">{meal ? meal.name : "Nothing planned"}</span>
+                          <span className="sub">
+                            {lockedDays[i] ? "Kept when you re-roll" : swapped ? "Your pick" : d.rationale}
+                          </span>
+                        </span>
+                        {lockedDays[i] && <Lock size={14} className="lockIc" aria-label="Kept" />}
+                        <ChevronRight size={16} className="chev" />
+                      </button>
                       {open && (
-                        <div className="dist">
-                          <div className="swap-row">
-                            <label className="swap-label">Swap dinner</label>
-                            <select
-                              className="swap-select"
-                              value={did}
-                              onChange={(e) => {
-                                const v = e.target.value;
-                                setOverrides((o) => {
-                                  const next = { ...o };
-                                  if (v === d.mealId) delete next[i];
-                                  else next[i] = v;
-                                  return next;
-                                });
-                              }}
-                            >
+                        <div className="dayMore">
+                          <p className="moreHead">Likely for {DAY_FULL[d.dow]}</p>
+                          <div className="alts">
+                            {d.candidates.map((c) => (
+                              <button key={c.id} className={c.id === did ? "alt on" : "alt"} onClick={() => swapTo(i, d, c.id)}>
+                                <span>{byId[c.id]?.name || "Nothing"}</span>
+                                <span className="pct">{Math.round(c.p * 100)}%</span>
+                              </button>
+                            ))}
+                          </div>
+                          <label className="row2">
+                            <span>Something else</span>
+                            <select value={did} onChange={(e) => swapTo(i, d, e.target.value)}>
                               {library.map((m) => (
-                                <option key={m.id} value={m.id}>
-                                  {m.name}
-                                </option>
+                                <option key={m.id} value={m.id}>{m.name}</option>
                               ))}
                             </select>
-                            {swapped && (
-                              <button
-                                className="revert"
-                                onClick={() =>
-                                  setOverrides((o) => {
-                                    const n = { ...o };
-                                    delete n[i];
-                                    return n;
-                                  })
-                                }
-                              >
-                                revert
-                              </button>
-                            )}
-                          </div>
-
+                          </label>
+                          <label className="row2">
+                            <span>Keep when re-rolling</span>
+                            <span className="switch">
+                              <input type="checkbox" role="switch" checked={!!lockedDays[i]} onChange={() => toggleLock(i)} />
+                              <span />
+                            </span>
+                          </label>
                           {meal?.ingredients?.length > 0 && (
-                            <div className="ings">
-                              <div className="ings-label">Major ingredients</div>
-                              <div className="ings-list">
-                                {meal.ingredients.map((ing) => (
-                                  <span key={ing} className="ing">
-                                    {ing}
-                                  </span>
-                                ))}
-                              </div>
-                            </div>
+                            <p className="ingsLine">Needs {meal.ingredients.join(", ")}</p>
                           )}
-
-                          <div className="dist-label">Model&apos;s distribution for this {DAY_FULL[d.dow]}</div>
-                          {d.candidates.map((c) => (
-                            <button
-                              key={c.id}
-                              className={c.id === did ? "cand picked" : "cand"}
-                              onClick={() =>
-                                setOverrides((o) => {
-                                  const n = { ...o };
-                                  if (c.id === d.mealId) delete n[i];
-                                  else n[i] = c.id;
-                                  return n;
-                                })
-                              }
-                            >
-                              <span className="cand-name">{byId[c.id]?.name || "—"}</span>
-                              <span className="cand-bar">
-                                <span style={{ width: `${Math.max(3, c.p * 100)}%` }} />
-                              </span>
-                              <span className="cand-p">{Math.round(c.p * 100)}%</span>
-                            </button>
-                          ))}
                         </div>
                       )}
                     </li>
                   );
                 })}
-              </ol>
+              </ul>
 
-              <div className="controls">
-                <div className="controls-title">Model</div>
-                <Slider
-                  label="Recent weeks weigh more"
-                  hint={`Older weeks fade by half every ${params.halfLife} ${params.halfLife === 1 ? "week" : "weeks"}`}
-                  min={0.5}
-                  max={8}
-                  step={0.5}
-                  value={params.halfLife}
-                  onChange={(v) => setParams((p) => ({ ...p, halfLife: v }))}
-                  fmt={(v) => `${v}w`}
-                />
-                <Slider
-                  label="Gentle nudge toward balance"
-                  hint={
-                    params.nudge < 0.03
-                      ? "Off — pure prediction"
-                      : "Leans toward veg, and away from a second treat night"
-                  }
-                  min={0}
-                  max={1}
-                  step={0.05}
-                  value={params.nudge}
-                  onChange={(v) => setParams((p) => ({ ...p, nudge: v }))}
-                  fmt={(v) => `${Math.round(v * 100)}%`}
-                />
-                <Slider
-                  label="Shake up the rotation"
-                  hint="Chance of slotting in something you've not had lately"
-                  min={0}
-                  max={0.4}
-                  step={0.02}
-                  value={params.epsilon}
-                  onChange={(v) => setParams((p) => ({ ...p, epsilon: v }))}
-                  fmt={(v) => `${Math.round(v * 100)}%`}
-                />
-                <Slider
-                  label="Don't repeat a meal within"
-                  hint="Days before a dinner can return"
-                  min={0}
-                  max={6}
-                  step={1}
-                  value={params.repeatWindow}
-                  onChange={(v) => setParams((p) => ({ ...p, repeatWindow: v }))}
-                  fmt={(v) => `${v}d`}
-                />
+              <div className="actions">
+                <button className="btn" onClick={reroll}><Dices size={16} /> Re-roll</button>
+                <button className="btn primary" onClick={confirmWeek}><Check size={16} /> Confirm week</button>
               </div>
+              <p className="gf">Confirming logs the week, so next week&rsquo;s forecast learns from it.</p>
+
+              <details className="group model">
+                <summary className="gh">Tune the forecast<ChevronRight size={14} className="chev" /></summary>
+                <div className="list padded">
+                  <Slider
+                    label="Recent weeks count more"
+                    hint={`Older weeks fade by half every ${params.halfLife} ${params.halfLife === 1 ? "week" : "weeks"}`}
+                    min={0.5} max={8} step={0.5} value={params.halfLife}
+                    onChange={(v) => setParams((p) => ({ ...p, halfLife: v }))}
+                    fmt={(v) => `${v} wk`}
+                  />
+                  <Slider
+                    label="Nudge towards balance"
+                    hint={params.nudge < 0.03 ? "Off: pure prediction" : "Leans towards veg, and away from a second treat night"}
+                    min={0} max={1} step={0.05} value={params.nudge}
+                    onChange={(v) => setParams((p) => ({ ...p, nudge: v }))}
+                    fmt={(v) => `${Math.round(v * 100)}%`}
+                  />
+                  <Slider
+                    label="Try something different"
+                    hint="Chance of a dinner you've not had lately"
+                    min={0} max={0.4} step={0.02} value={params.epsilon}
+                    onChange={(v) => setParams((p) => ({ ...p, epsilon: v }))}
+                    fmt={(v) => `${Math.round(v * 100)}%`}
+                  />
+                  <Slider
+                    label="Don't repeat within"
+                    hint="Days before a dinner can come back"
+                    min={0} max={6} step={1} value={params.repeatWindow}
+                    onChange={(v) => setParams((p) => ({ ...p, repeatWindow: v }))}
+                    fmt={(v) => `${v} ${v === 1 ? "day" : "days"}`}
+                  />
+                </div>
+              </details>
             </>
           )}
+        </section>
+      )}
+
+      {tab === "shop" && (
+        <section className="panel">
+          {toBuy.length === 0 ? (
+            <p className="gf">Nothing to buy for this week&rsquo;s dinners.</p>
+          ) : (
+            <>
+              <div className="meter" aria-hidden="true"><i style={{ width: `${(inBasket / toBuy.length) * 100}%` }} /></div>
+              {nextToAdd ? (
+                <button className="btn primary wide" onClick={openNext}>
+                  <ShoppingBasket size={17} /> Next on Ocado: {nextToAdd.label}
+                </button>
+              ) : (
+                <div className="banner">Everything&rsquo;s in the basket. Book a slot on Ocado and you&rsquo;re done.</div>
+              )}
+
+              <ul className="list basket">
+                {toBuy.map((it) => (
+                  <li key={it.key} className={it.got ? "got" : ""}>
+                    <div className="li">
+                      <button
+                        className="tick"
+                        aria-pressed={it.got}
+                        aria-label={`${it.label}: ${it.got ? "in basket" : "not in basket"}`}
+                        onClick={() => setTick(it.key, !it.got)}
+                      >
+                        <Check size={14} />
+                      </button>
+                      <a className="lab" href={it.href} target="ocado" rel="noopener noreferrer" onClick={() => setTick(it.key, true)}>
+                        <span className="meal">{it.label}</span>
+                        <span className="sub">
+                          {it.days.map((d) => DAY_FULL[d].slice(0, 3)).join(", ")}
+                          {it.url ? ". Your usual product" : ""}
+                        </span>
+                      </a>
+                      <button
+                        className="more"
+                        aria-expanded={linking === it.key}
+                        aria-label={`Options for ${it.label}`}
+                        onClick={() => { setLinking(linking === it.key ? null : it.key); setLinkDraft(it.url); }}
+                      >
+                        <MoreHorizontal size={18} />
+                      </button>
+                    </div>
+                    {linking === it.key && (
+                      <div className="itemMore">
+                        <label className="linkRow">
+                          <span>Your usual Ocado product</span>
+                          <span className="linkField">
+                            <input
+                              autoFocus
+                              placeholder="Paste the product link"
+                              value={linkDraft}
+                              onChange={(e) => setLinkDraft(e.target.value)}
+                              onKeyDown={(e) => e.key === "Enter" && saveLink(it.key)}
+                            />
+                            <button className="btn small" onClick={() => saveLink(it.key)}>Save</button>
+                          </span>
+                        </label>
+                        {linkDraft.trim() && !OCADO_PRODUCT.test(linkDraft.trim().split("?")[0]) && (
+                          <span className="err">That isn&rsquo;t an Ocado product link.</span>
+                        )}
+                        <button className="textBtn" onClick={() => { setProduct(it.key, { staple: true }); setLinking(null); }}>
+                          We always have this
+                        </button>
+                      </div>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+
+          {cupboard.length > 0 && (
+            <details className="group">
+              <summary className="gh">Check the cupboard ({cupboard.length})<ChevronRight size={14} className="chev" /></summary>
+              <ul className="list">
+                {cupboard.map((it) => (
+                  <li key={it.key}>
+                    <div className="li">
+                      <span className="lab">
+                        <span className="meal">{it.label}</span>
+                        <span className="sub">{it.days.map((d) => DAY_FULL[d].slice(0, 3)).join(", ")}</span>
+                      </span>
+                      <button className="textBtn" onClick={() => setProduct(it.key, { staple: false })}>Add to list</button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
+
+          <div className="actions">
+            <button className="btn" onClick={copyList}>{copied ? "Copied" : "Copy list"}</button>
+          </div>
+          <p className="gf">
+            Ocado doesn&rsquo;t let other apps fill your basket, so each item opens Ocado for you to add.
+            Paste your usual product link once (the ••• button) and it opens straight to it after that.
+          </p>
         </section>
       )}
 
@@ -1059,7 +952,7 @@ export default function DinnerForecast() {
                 )}
               </div>
               <p className="note">
-                Weeks locked in ahead of time. The Forecast tab always shows the next unplanned week.
+                Weeks you&rsquo;ve planned ahead. This week always shows the next unplanned week.
               </p>
 
               {showPlanNext && (
@@ -1161,7 +1054,7 @@ export default function DinnerForecast() {
               )}
 
               <div className="sec-head mt">
-                <h2>Log last week</h2>
+                <h2>Last week</h2>
                 {!showRetroConfirm && (
                   <button className="btn" onClick={() => setShowRetroConfirm(true)}>
                     <Plus size={15} /> Log last week
@@ -1169,12 +1062,12 @@ export default function DinnerForecast() {
                 )}
               </div>
               <p className="note">
-                Pre-filled from the model — correct any nights that differed, then confirm.
+                Filled in from the forecast. Fix any nights that were different, then confirm.
               </p>
 
               {retroConfirmed && (
                 <div className="confirmed-note">
-                  Last week logged — the forecast will learn from it.
+                  Last week logged. The forecast will learn from it.
                 </div>
               )}
 
@@ -1238,15 +1131,13 @@ export default function DinnerForecast() {
           )}
 
           <div className={`sec-head${hasData ? " mt" : ""}`}>
-            <h2>Trailing weeks</h2>
+            <h2>Past weeks</h2>
             <button className="btn ghost" onClick={addWeek}>
-              <Plus size={15} /> Week
+              <Plus size={15} /> Add week
             </button>
           </div>
           <p className="note">
-            The full record — use this to correct older weeks or fix individual nights.
-            More weeks sharpens the day-of-week pattern; the half-life control decides how fast
-            old weeks stop counting.
+            Fix any night here. More weeks make the forecast sharper.
           </p>
 
           <div className="grid-wrap">
@@ -1286,7 +1177,7 @@ export default function DinnerForecast() {
                 {!weeks.length && (
                   <tr>
                     <td colSpan={9} className="muted pad">
-                      No weeks yet — add one above.
+                      No weeks yet. Add one above.
                     </td>
                   </tr>
                 )}
@@ -1298,20 +1189,14 @@ export default function DinnerForecast() {
 
       {tab === "library" && (
         <section className="panel">
-          <div className="sec-head">
-            <h2>Meal library</h2>
-            <span className="muted">{library.length} dinners</span>
-          </div>
           <p className="note">
-            Each dinner is defined once here. Tap a dish to edit its tags (auto-guessed from the
-            name, they drive the variety and balance logic) and its major ingredients (which feed the
-            shopping list).
+            Tap a dinner to change its tags or ingredients. Tags keep the week varied; ingredients make the shop.
           </p>
 
           <div className="add-row">
             <input
               value={newMeal}
-              placeholder="Add a dinner, e.g. Salmon traybake"
+              placeholder="Add a dinner, e.g. Sausage traybake"
               onChange={(e) => setNewMeal(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && addMeal()}
             />
@@ -1417,10 +1302,7 @@ export default function DinnerForecast() {
         </section>
       )}
 
-      <footer className="ft">
-        Forecast, not prescription. Numbers are the model&apos;s own confidence in each pick given your
-        history, the constraints, and the nudge — not a claim about nutrition.
-      </footer>
+      </div>
     </div>
   );
 }
@@ -1472,224 +1354,184 @@ function Toggle({ on, onClick, children }) {
 
 /* ================================== css ================================== */
 const CSS = `
-@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Inter:wght@400;500;600&family=Space+Mono:wght@400;700&display=swap');
-
+/* Apple HIG, matching the FIRE app: grouped backgrounds, inset lists, one floating glass tab bar.
+   Accents from Sanzo Wada's Dictionary of Color Combinations: Antwarp Blue, Ochraceous Salmon, Sulphine Yellow. */
 .dfc{
-  --ink:#16302B; --ink-soft:#4d5e57; --paper:#E7DFCD; --card:#F5EFE2;
-  --amber:#C5732B; --amber-soft:#e7c39a; --sage:#6E8B6A; --clay:#A8472E; --line:#D7CBB3;
-  font-family:'Inter',system-ui,sans-serif; color:var(--ink);
-  background:var(--paper); padding:22px 16px 40px; max-width:760px; margin:0 auto;
-  min-height:100%; -webkit-font-smoothing:antialiased;
+  --bg:#f2f2f7; --bg2:#ffffff; --bg3:#f2f2f7;
+  --label:#000; --label2:rgba(60,60,67,.6); --label3:rgba(60,60,67,.3);
+  --sep:rgba(60,60,67,.18); --fill:rgba(120,120,128,.16); --fill2:rgba(118,118,128,.12);
+  --tint:rgb(0,113,144); --tintText:rgb(0,105,134); --onTint:#fff;
+  --salmon:rgb(200,140,96); --sun:rgb(193,159,44); --moss:rgb(67,119,66); --green:rgb(52,199,89); --redText:rgb(233,21,45);
+  --glass:rgba(255,255,255,.62); --glassEdge:rgba(255,255,255,.75); --glassShadow:0 10px 36px rgba(0,0,0,.14),0 1px 3px rgba(0,0,0,.08);
+  --sel:rgba(0,0,0,.06);
+  --f:-apple-system,BlinkMacSystemFont,"SF Pro Text","SF Pro",system-ui,"Segoe UI",Roboto,"Helvetica Neue",sans-serif;
+  --fd:-apple-system,BlinkMacSystemFont,"SF Pro Display","SF Pro",system-ui,"Segoe UI",Roboto,"Helvetica Neue",sans-serif;
+  --fr:ui-rounded,"SF Pro Rounded",-apple-system,BlinkMacSystemFont,system-ui,sans-serif;
+  background:var(--bg); color:var(--label); font-family:var(--f); font-size:17px; line-height:22px; letter-spacing:-.01em;
+  min-height:100vh; -webkit-font-smoothing:antialiased;
 }
+@media (prefers-color-scheme: dark){.dfc{
+  --bg:#000; --bg2:#1c1c1e; --bg3:#2c2c2e;
+  --label:#fff; --label2:rgba(235,235,245,.6); --label3:rgba(235,235,245,.3);
+  --sep:rgba(84,84,88,.6); --fill:rgba(120,120,128,.36); --fill2:rgba(118,118,128,.24);
+  --tint:rgb(120,205,208); --tintText:rgb(120,205,208); --onTint:#06262b;
+  --salmon:rgb(216,163,123); --sun:rgb(210,176,64); --moss:rgb(126,176,112); --green:rgb(48,209,88); --redText:rgb(255,97,101);
+  --glass:rgba(40,40,44,.6); --glassEdge:rgba(255,255,255,.14); --glassShadow:0 10px 36px rgba(0,0,0,.5); --sel:rgba(255,255,255,.1);
+  color-scheme:dark;
+}}
 .dfc *{box-sizing:border-box;}
-.loading{font-family:'Fraunces',serif;padding:60px;text-align:center;color:#16302B;}
+.dfc button,.dfc input,.dfc select{font-family:inherit;}
+.dfc :focus-visible{outline:3px solid color-mix(in srgb,var(--tint) 60%,transparent);outline-offset:2px;border-radius:8px;}
+.loading{font-family:-apple-system,system-ui,sans-serif;padding:80px 20px;text-align:center;color:rgba(60,60,67,.6);}
 
-.hd .eyebrow{font-family:'Space Mono',monospace;font-size:11px;letter-spacing:.22em;color:var(--amber);font-weight:700;}
-.hd h1{font-family:'Fraunces',serif;font-weight:600;font-size:40px;line-height:1.02;margin:6px 0 8px;letter-spacing:-.01em;}
-.hd .sub{font-size:14.5px;line-height:1.5;color:var(--ink-soft);max-width:54ch;margin:0;}
+.wrap{max-width:720px;margin:0 auto;padding:12px 16px calc(env(safe-area-inset-bottom,0px) + 120px);}
+@media (min-width:900px){.wrap{padding-top:88px;padding-bottom:64px;}}
+.head{display:grid;gap:2px;padding:8px 4px 16px;}
+.largeTitle{font-family:var(--fd);font-size:34px;line-height:41px;font-weight:700;letter-spacing:.01em;margin:0;}
+.footnote{font-size:13px;line-height:18px;color:var(--label2);margin:0;}
+.save-status.error{color:var(--redText);}
 
-.tabs{display:flex;gap:6px;margin:22px 0 16px;border-bottom:1px solid var(--line);}
-.tab{font-family:'Space Mono',monospace;font-size:12px;letter-spacing:.04em;background:none;border:none;
-  padding:10px 4px;margin-right:18px;color:var(--ink-soft);cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;}
-.tab.on{color:var(--ink);border-bottom-color:var(--amber);font-weight:700;}
-.save-status{margin-left:auto;align-self:center;font-family:'Space Mono',monospace;font-size:10.5px;letter-spacing:.04em;color:var(--ink-soft);padding-bottom:6px;}
-.save-status.saved{color:var(--sage);}
-.save-status.error{color:var(--clay);}
-.save-status.saving{color:var(--ink-soft);}
+/* Floating Liquid Glass tab bar: bottom on phones, top on wide screens */
+.tabbar{position:fixed;z-index:6;left:50%;transform:translateX(-50%);bottom:calc(env(safe-area-inset-bottom,0px) + 14px);
+  display:flex;gap:2px;padding:4px;border-radius:999px;background:var(--glass);
+  backdrop-filter:blur(22px) saturate(190%);-webkit-backdrop-filter:blur(22px) saturate(190%);
+  border:1px solid var(--glassEdge);box-shadow:var(--glassShadow),inset 0 1px 0 rgba(255,255,255,.35);}
+@media (min-width:900px){.tabbar{bottom:auto;top:18px;}}
+.tab{display:grid;justify-items:center;gap:1px;min-width:76px;padding:7px 12px 6px;border:0;border-radius:999px;background:transparent;color:var(--label);cursor:pointer;font-size:10px;line-height:12px;font-weight:600;transition:background .25s,transform .25s;}
+.tab svg{width:22px;height:22px;}
+.tab[aria-selected="true"]{background:var(--sel);color:var(--tint);}
+.tab:active{transform:scale(.94);}
+@media (min-width:900px){.tab{grid-auto-flow:column;gap:6px;align-items:center;font-size:15px;line-height:20px;padding:8px 16px;}.tab svg{width:19px;height:19px;}}
 
-.panel{}
-.panel-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;}
-.range{font-family:'Space Mono',monospace;font-size:12.5px;letter-spacing:.04em;color:var(--ink-soft);}
+.panel{display:grid;grid-template-columns:minmax(0,1fr);gap:12px;}
+.gh{font-size:13px;line-height:18px;color:var(--label2);padding:0 20px;margin:0;}
+.gf{font-size:13px;line-height:18px;color:var(--label2);padding:0 20px;margin:0;max-width:62ch;}
+.banner{background:color-mix(in srgb,var(--tint) 12%,var(--bg2));color:var(--label);border-radius:16px;padding:12px 16px;font-size:15px;line-height:20px;}
 
-.btn{font-family:'Inter',sans-serif;font-size:13.5px;font-weight:600;display:inline-flex;align-items:center;gap:6px;
-  background:var(--ink);color:var(--card);border:none;border-radius:2px;padding:8px 13px;cursor:pointer;}
-.btn:hover{background:#0e221e;}
-.btn.ghost{background:transparent;color:var(--ink);border:1px solid var(--ink);}
-.btn.ghost:hover{background:rgba(22,48,43,.06);}
-.btn.cta{background:var(--amber);color:var(--card);font-weight:700;padding:9px 16px;
-  box-shadow:0 1px 0 rgba(122,74,30,.35);}
-.btn.cta:hover{background:#b0641f;}
-.btn.danger{color:var(--clay);border-color:var(--clay);}
-.btn.danger:hover{background:rgba(168,71,46,.07);}
-.flywheel-hint{font-family:'Space Mono',monospace;font-size:11px;letter-spacing:.04em;
-  color:var(--ink-soft);text-align:right;margin:8px 0 0;}
+/* Inset grouped lists */
+.list{list-style:none;margin:0;padding:0;background:var(--bg2);border-radius:26px;overflow:hidden;}
+.list.padded{padding:6px 20px 14px;}
+.list > li{position:relative;}
+.list > li + li::before{content:"";position:absolute;top:0;left:20px;right:0;height:1px;background:var(--sep);z-index:1;}
+.li{display:flex;align-items:center;gap:12px;width:100%;min-height:56px;padding:10px 16px 10px 20px;border:0;background:transparent;color:inherit;text-align:left;font:inherit;}
+button.li{cursor:pointer;}
+button.li:active{background:var(--sel);}
+.lab{flex:1;min-width:0;display:grid;gap:1px;color:inherit;text-decoration:none;}
+.meal{font-size:17px;line-height:22px;}
+.sub{font-size:13px;line-height:18px;color:var(--label2);overflow:hidden;text-overflow:ellipsis;}
+.chev{color:var(--label3);flex:none;transition:transform .2s;}
 
-.empty{text-align:center;padding:48px 0;color:var(--ink-soft);}
-.empty p{margin-bottom:16px;}
+/* This week */
+.dayCol{width:38px;flex:none;display:grid;justify-items:center;line-height:1;}
+.dayCol b{font-size:12px;font-weight:600;color:var(--tint);text-transform:none;}
+.dayCol small{font-family:var(--fr);font-size:22px;line-height:26px;font-weight:600;color:var(--label);}
+.days li.open .dayRow .chev{transform:rotate(90deg);}
+.lockIc{color:var(--label2);flex:none;}
+.dayMore{padding:4px 20px 16px 70px;display:grid;grid-template-columns:minmax(0,1fr);gap:10px;}
+.moreHead{margin:0;font-size:13px;color:var(--label2);}
+.alts{display:grid;grid-template-columns:minmax(0,1fr);gap:6px;}
+.alt{display:flex;justify-content:space-between;align-items:center;gap:10px;border:0;border-radius:12px;padding:10px 12px;background:var(--fill2);color:var(--label);font-size:15px;cursor:pointer;text-align:left;}
+.alt.on{background:color-mix(in srgb,var(--tint) 16%,var(--bg2));color:var(--tintText);font-weight:600;}
+.pct{font-variant-numeric:tabular-nums;color:var(--label2);font-size:13px;}
+.alt.on .pct{color:var(--tintText);}
+.row2{display:flex;justify-content:space-between;align-items:center;gap:12px;font-size:15px;}
+.row2 select{min-width:0;max-width:58%;text-overflow:ellipsis;border:0;background:transparent;color:var(--tintText);font-size:15px;text-align:right;cursor:pointer;}
+.ingsLine{margin:0;font-size:13px;line-height:18px;color:var(--label2);}
+@media (max-width:420px){.dayMore{padding-left:20px;}}
 
-/* ---- ledger (the signature) ---- */
-.ledger{list-style:none;margin:0;padding:0;border:1px solid var(--line);border-radius:4px;overflow:hidden;background:var(--card);}
-.row{border-bottom:1px solid var(--line);}
-.row:last-child{border-bottom:none;}
-.row.explore{background:linear-gradient(90deg,rgba(110,139,106,.10),transparent 60%);}
-.row.locked{background:rgba(197,115,43,.06);}
-.row.skip .meal-name{color:var(--ink-soft);font-style:italic;}
-.row.skip .bar>span{background:var(--ink-soft);opacity:.35;}
-.row.locked .bar>span{background:var(--amber);opacity:.55;}
-.cold-note{font-size:12.5px;line-height:1.45;background:rgba(197,115,43,.10);border:1px solid var(--amber-soft);color:#7a4a1e;padding:9px 12px;border-radius:3px;margin-bottom:12px;}
-.confirmed-note{font-size:12.5px;line-height:1.45;background:rgba(110,139,106,.14);border:1px solid var(--sage);color:#3f5a3b;padding:9px 12px;border-radius:3px;margin-bottom:12px;}
-.row-wrap{display:flex;align-items:stretch;}
-.lock-btn{background:none;border:none;border-right:1px solid var(--line);padding:0 11px;cursor:pointer;
-  color:var(--line);display:flex;align-items:center;flex-shrink:0;transition:color .15s,background .15s;}
-.lock-btn:hover{background:rgba(22,48,43,.04);color:var(--ink-soft);}
-.lock-btn.on{color:var(--amber);}
-.row-main{flex:1;min-width:0;display:flex;align-items:flex-start;gap:14px;padding:14px 14px;background:none;border:none;text-align:left;cursor:pointer;}
-.row-day{flex:0 0 78px;padding-top:1px;}
-.row-day .dow{font-family:'Fraunces',serif;font-size:16px;font-weight:600;display:block;line-height:1.1;}
-.row-day .date{font-family:'Space Mono',monospace;font-size:11px;color:var(--ink-soft);letter-spacing:.02em;}
-.row-meal{flex:1;min-width:0;}
-.meal-line{display:flex;justify-content:space-between;align-items:baseline;gap:10px;}
-.meal-name{font-size:16px;font-weight:600;color:var(--ink);}
-.prob{font-family:'Space Mono',monospace;font-size:13px;font-weight:700;color:var(--amber);}
-.prob.locked-prob{font-family:'Space Mono',monospace;font-size:10px;letter-spacing:.03em;color:var(--amber);text-transform:uppercase;}
-.bar{height:6px;background:rgba(22,48,43,.08);border-radius:3px;margin:7px 0 7px;overflow:hidden;}
-.bar>span{display:block;height:100%;background:var(--amber);border-radius:3px;transition:width .5s cubic-bezier(.2,.7,.2,1);}
-.why{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:12.5px;color:var(--ink-soft);}
-.tilt{font-family:'Space Mono',monospace;font-size:10px;letter-spacing:.03em;background:rgba(110,139,106,.18);color:#3f5a3b;padding:2px 6px;border-radius:2px;}
-.chev{flex:0 0 16px;color:var(--ink-soft);padding-top:2px;}
+.actions{display:flex;gap:10px;flex-wrap:wrap;padding:4px 0;}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;border:0;background:var(--fill2);color:var(--tintText);font-size:15px;line-height:20px;font-weight:600;padding:10px 18px;border-radius:999px;cursor:pointer;}
+.btn:active{transform:scale(.97);}
+.btn.primary,.btn.cta{background:var(--tint);color:var(--onTint);}
+.btn.ghost{background:var(--fill2);color:var(--tintText);}
+.btn.small{font-size:13px;padding:6px 12px;}
+.btn.wide{width:100%;padding:14px 18px;font-size:17px;}
+.btn.danger{color:var(--redText);}
+.btn:disabled{opacity:.5;}
+.textBtn{border:0;background:none;color:var(--tintText);font-size:15px;font-weight:600;cursor:pointer;padding:6px 0;white-space:nowrap;}
 
-.dist{padding:2px 14px 14px 142px;background:rgba(22,48,43,.025);}
-.dist-label{font-family:'Space Mono',monospace;font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-soft);margin:6px 0 8px;}
-.cand{display:flex;align-items:center;gap:10px;margin-bottom:5px;width:100%;background:none;border:none;padding:3px 4px;border-radius:3px;cursor:pointer;text-align:left;}
-.cand:hover{background:rgba(22,48,43,.05);}
-.cand-name{flex:0 0 130px;font-size:12.5px;color:var(--ink-soft);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.cand.picked .cand-name{color:var(--ink);font-weight:600;}
-.cand-bar{flex:1;height:5px;background:rgba(22,48,43,.07);border-radius:3px;overflow:hidden;}
-.cand-bar>span{display:block;height:100%;background:var(--amber-soft);}
-.cand.picked .cand-bar>span{background:var(--amber);}
-.cand-p{flex:0 0 34px;text-align:right;font-family:'Space Mono',monospace;font-size:11px;color:var(--ink-soft);}
+/* Model, in a disclosure */
+details.group{display:grid;gap:7px;}
+details.group > summary{list-style:none;display:flex;align-items:center;gap:6px;cursor:pointer;padding:8px 20px;}
+details.group > summary::-webkit-details-marker{display:none;}
+details.group[open] > summary .chev{transform:rotate(90deg);}
+.slider{padding:12px 0;}
+.slider + .slider{border-top:1px solid var(--sep);}
+.slider-top{display:flex;justify-content:space-between;gap:10px;font-size:15px;}
+.slider-val{color:var(--label2);font-variant-numeric:tabular-nums;}
+.slider input[type=range]{width:100%;margin:10px 0 4px;accent-color:var(--tint);}
+.slider-hint{font-size:13px;line-height:18px;color:var(--label2);}
 
-/* ---- header actions + shopping list ---- */
-.head-actions{display:flex;gap:8px;flex-wrap:wrap;}
-.btn.small{padding:5px 11px;font-size:12.5px;}
-.shopping{border:1px solid var(--line);border-radius:4px;background:var(--card);padding:12px;margin-bottom:14px;}
-.shopping-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:9px;font-size:12.5px;color:var(--ink-soft);}
-.shopping-text{width:100%;font-family:'Space Mono',monospace;font-size:12.5px;line-height:1.55;color:var(--ink);background:var(--paper);border:1px solid var(--line);border-radius:3px;padding:9px 11px;resize:vertical;}
-.shopping-note{font-size:11.5px;color:var(--ink-soft);margin-top:10px;line-height:1.5;}
-.shopping-note svg{vertical-align:-1px;}
-.basket-bar{display:grid;gap:10px;margin:4px 0 12px;}
-.basket-meter{height:6px;border-radius:3px;background:var(--line);overflow:hidden;}
-.basket-meter i{display:block;height:100%;background:var(--sage);transition:width .25s;}
-.ocado-next{justify-content:center;width:100%;font-size:14px;padding:11px 14px;}
-.basket-done{font-family:'Fraunces',serif;font-size:16px;color:var(--ink);padding:4px 0;}
-.basket{list-style:none;margin:0;padding:0;border-top:1px solid var(--line);}
-.basket li{display:flex;align-items:flex-start;gap:10px;padding:10px 2px;border-bottom:1px solid var(--line);}
-.basket li.got .b-name{color:var(--ink-soft);text-decoration:line-through;text-decoration-color:var(--line);}
-.b-tick{flex:none;width:22px;height:22px;margin-top:1px;border-radius:50%;border:1.5px solid var(--sage);background:transparent;color:var(--paper);display:grid;place-items:center;cursor:pointer;padding:0;}
-.b-tick[aria-pressed="true"]{background:var(--sage);}
-.b-main{flex:1;min-width:0;display:grid;gap:2px;}
-.b-name{font-size:15px;font-weight:500;color:var(--ink);text-decoration:none;}
-.b-name:hover{color:var(--amber);}
-.b-name.plain:hover{color:var(--ink);}
-.b-meta{font-size:11.5px;color:var(--ink-soft);}
-.b-icon{flex:none;width:32px;height:32px;border:0;background:transparent;color:var(--ink-soft);border-radius:4px;display:grid;place-items:center;cursor:pointer;}
-.b-icon:hover{background:var(--paper);color:var(--ink);}
-.b-link-edit{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:6px;}
-.b-link-edit input{flex:1 1 220px;min-width:0;font:inherit;font-size:13px;padding:7px 9px;border:1px solid var(--line);border-radius:3px;background:var(--paper);color:var(--ink);}
-.b-err{font-size:11.5px;color:var(--clay);flex-basis:100%;}
-.cupboard{margin-top:12px;}
-.cupboard summary{cursor:pointer;font-size:12.5px;color:var(--ink-soft);padding:4px 0;}
+/* Shop */
+.meter{height:6px;border-radius:999px;background:var(--fill);overflow:hidden;margin:0 4px;}
+.meter i{display:block;height:100%;background:var(--moss);border-radius:999px;transition:width .3s;}
+.tick{flex:none;width:26px;height:26px;border-radius:999px;border:2px solid var(--label3);background:transparent;color:transparent;display:grid;place-items:center;cursor:pointer;padding:0;transition:background .18s,border-color .18s;}
+.tick[aria-pressed="true"]{background:var(--moss);border-color:var(--moss);color:#fff;}
+.basket li.got .meal{color:var(--label2);}
+.more{flex:none;width:36px;height:36px;border:0;border-radius:999px;background:transparent;color:var(--label2);display:grid;place-items:center;cursor:pointer;}
+.more[aria-expanded="true"]{background:var(--fill2);color:var(--tintText);}
+.itemMore{padding:2px 20px 14px 58px;display:grid;gap:8px;}
+.linkRow{display:grid;gap:6px;font-size:13px;color:var(--label2);}
+.linkField{display:flex;gap:8px;}
+.linkField input{flex:1;min-width:0;font-size:15px;padding:9px 12px;border-radius:10px;border:0;background:var(--fill2);color:var(--label);}
+.err{font-size:13px;color:var(--redText);}
+@media (max-width:420px){.itemMore{padding-left:20px;}}
 
-/* ---- swap + ingredients in the expanded day ---- */
-.swap-row{display:flex;align-items:center;gap:9px;margin:2px 0 12px;}
-.swap-label{font-family:'Space Mono',monospace;font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-soft);}
-.swap-select{flex:1;font-family:'Inter',sans-serif;font-size:13.5px;padding:7px 9px;border:1px solid var(--line);border-radius:3px;background:var(--paper);color:var(--ink);}
-.revert{font-family:'Space Mono',monospace;font-size:11px;background:none;border:1px solid var(--line);border-radius:2px;color:var(--clay);padding:6px 9px;cursor:pointer;}
-.ings{margin:0 0 12px;}
-.ings-label{font-family:'Space Mono',monospace;font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-soft);margin-bottom:6px;}
-.ings-list{display:flex;flex-wrap:wrap;gap:5px;}
-.ing{font-size:12px;background:rgba(22,48,43,.06);color:var(--ink);padding:3px 9px;border-radius:999px;}
-.row.swapped .meal-name{color:var(--amber);}
-.prob.your{font-family:'Space Mono',monospace;font-size:10px;letter-spacing:.03em;color:var(--amber);text-transform:uppercase;}
-.row.swapped .bar>span{background:var(--sage);}
-.ings-edit{flex-basis:100%;text-transform:none!important;letter-spacing:0!important;}
-.ings-edit-top{display:flex;align-items:center;justify-content:space-between;gap:8px;}
-.suggest-btn{display:inline-flex;align-items:center;gap:4px;font-family:'Space Mono',monospace;font-size:10px;letter-spacing:.03em;text-transform:none;background:var(--ink);color:var(--card);border:none;border-radius:2px;padding:4px 8px;cursor:pointer;}
-.suggest-btn:hover{background:#0e221e;}
-.suggest-btn:disabled{opacity:.55;cursor:default;}
-.ings-edit input{font-family:'Inter',sans-serif;font-size:13px;padding:7px 9px;border:1px solid var(--line);border-radius:2px;background:var(--paper);color:var(--ink);width:100%;margin-top:4px;}
-
-/* ---- controls ---- */
-.controls{margin-top:24px;border-top:1px solid var(--line);padding-top:18px;}
-.controls-title{font-family:'Space Mono',monospace;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-soft);margin-bottom:14px;}
-.slider{margin-bottom:18px;}
-.slider-top{display:flex;justify-content:space-between;align-items:baseline;}
-.slider-label{font-size:13.5px;font-weight:600;}
-.slider-val{font-family:'Space Mono',monospace;font-size:12.5px;font-weight:700;color:var(--amber);}
-.slider input[type=range]{width:100%;margin:8px 0 4px;accent-color:var(--ink);height:3px;}
-.slider-hint{font-size:12px;color:var(--ink-soft);}
-
-/* ---- history ---- */
-.sec-head{display:flex;justify-content:space-between;align-items:center;}
-.sec-head.mt{margin-top:30px;}
-.sec-head h2{font-family:'Fraunces',serif;font-weight:600;font-size:21px;margin:0;}
-.muted{color:var(--ink-soft);font-size:13px;}
-.muted.pad{padding:14px;display:block;}
-.note{font-size:13px;color:var(--ink-soft);line-height:1.5;margin:6px 0 14px;max-width:60ch;}
-
-.add-row{display:flex;gap:8px;margin-bottom:14px;}
-.add-row input{flex:1;font-family:'Inter',sans-serif;font-size:14px;padding:9px 11px;border:1px solid var(--line);border-radius:2px;background:var(--card);color:var(--ink);}
-.add-row input:focus{outline:2px solid var(--amber);outline-offset:-1px;}
-
-.lib{list-style:none;margin:0;padding:0;border:1px solid var(--line);border-radius:4px;background:var(--card);}
-.lib-row{display:flex;align-items:center;border-bottom:1px solid var(--line);flex-wrap:wrap;}
-.lib-row:last-child{border-bottom:none;}
-.lib-main{flex:1;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;
-  background:none;border:none;text-align:left;padding:11px 13px;cursor:pointer;color:var(--ink);}
-.lib-name{font-size:14.5px;font-weight:500;}
-.chips{display:flex;gap:5px;flex-wrap:wrap;}
-.chip{font-family:'Space Mono',monospace;font-size:10px;letter-spacing:.02em;background:rgba(22,48,43,.07);color:var(--ink-soft);padding:2px 7px;border-radius:2px;}
-.chip.veg{background:rgba(110,139,106,.18);color:#3f5a3b;}
-.chip.fish{background:rgba(110,139,106,.28);color:#2f4a2c;}
-.chip.treat{background:rgba(168,71,46,.14);color:var(--clay);}
-.icon-btn{background:none;border:none;color:var(--ink-soft);cursor:pointer;padding:11px 12px;}
-.icon-btn:hover{color:var(--clay);}
-
-.meal-edit{flex-basis:100%;display:flex;gap:16px;flex-wrap:wrap;align-items:flex-end;padding:0 13px 13px;}
-.meal-edit label{font-size:11px;color:var(--ink-soft);display:flex;flex-direction:column;gap:4px;font-family:'Space Mono',monospace;letter-spacing:.04em;text-transform:uppercase;}
-.meal-edit-name{flex-basis:100%;}
-.meal-edit-name input{font-family:'Inter',sans-serif;font-size:13px;padding:6px 8px;border:1px solid var(--line);border-radius:2px;background:var(--paper);color:var(--ink);text-transform:none;letter-spacing:0;width:100%;box-sizing:border-box;}
-.meal-edit select{font-family:'Inter',sans-serif;font-size:13px;padding:6px 8px;border:1px solid var(--line);border-radius:2px;background:var(--paper);color:var(--ink);text-transform:none;letter-spacing:0;}
-.toggles{display:flex;gap:6px;}
-.toggle{font-family:'Space Mono',monospace;font-size:11px;padding:6px 10px;border:1px solid var(--line);border-radius:2px;background:var(--paper);color:var(--ink-soft);cursor:pointer;}
-.toggle.on{background:var(--sage);color:#fff;border-color:var(--sage);}
-
-.grid-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:4px;background:var(--card);}
-.grid{border-collapse:collapse;width:100%;min-width:520px;}
-.grid th{font-family:'Space Mono',monospace;font-size:11px;font-weight:700;color:var(--ink-soft);padding:9px 4px;border-bottom:1px solid var(--line);}
-.grid .wk-h{width:60px;}
-.grid td{padding:5px 4px;border-bottom:1px solid var(--line);text-align:center;}
-.grid tr:last-child td{border-bottom:none;}
-.wk-label{font-family:'Space Mono',monospace;font-size:10.5px;color:var(--ink-soft);white-space:nowrap;padding-left:9px!important;text-align:left!important;}
-.grid select{font-family:'Inter',sans-serif;font-size:11.5px;max-width:88px;width:100%;padding:5px 4px;border:1px solid var(--line);border-radius:2px;background:var(--paper);color:var(--ink);}
-.mt{margin-top:18px;}
-
-/* ---- planned (upcoming) weeks ---- */
-.planned-week{border:1px solid var(--line);border-radius:4px;background:var(--card);padding:14px 14px 10px;margin-bottom:12px;}
-.planned-week-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;}
-
-/* ---- retro confirm (log last week) ---- */
-.retro-confirm{border:1px solid var(--line);border-radius:4px;background:var(--card);padding:14px 14px 10px;margin-bottom:4px;}
-.retro-range{font-family:'Space Mono',monospace;font-size:11.5px;color:var(--ink-soft);margin-bottom:12px;letter-spacing:.02em;}
+/* History and Meals */
+.sec-head{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:0 4px;}
+.sec-head h2{font-family:var(--fd);font-size:20px;line-height:25px;font-weight:600;margin:0;}
+.mt{margin-top:20px;}
+.note{font-size:13px;line-height:18px;color:var(--label2);margin:0;padding:0 4px;max-width:62ch;}
+.muted{color:var(--label2);font-size:15px;}
+.pad{padding:14px 20px;}
+.confirmed-note{background:color-mix(in srgb,var(--tint) 12%,var(--bg2));border-radius:16px;padding:12px 16px;font-size:15px;}
+.retro-confirm,.planned-week{background:var(--bg2);border-radius:26px;padding:14px 0 6px;}
+.retro-range{font-size:13px;color:var(--label2);padding:0 20px 6px;display:block;}
+.planned-week-head{display:flex;justify-content:space-between;align-items:center;padding-right:10px;}
 .retro-list{list-style:none;margin:0;padding:0;}
-.retro-row{display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid var(--line);}
-.retro-row:last-child{border-bottom:none;}
-.retro-day{flex:0 0 110px;}
-.retro-day .dow{font-family:'Fraunces',serif;font-size:15px;font-weight:600;display:block;line-height:1.2;}
-.retro-day .date{font-family:'Space Mono',monospace;font-size:10.5px;color:var(--ink-soft);}
-.retro-select{flex:1;font-family:'Inter',sans-serif;font-size:13.5px;padding:7px 9px;border:1px solid var(--line);border-radius:2px;background:var(--paper);color:var(--ink);}
-.retro-actions{display:flex;gap:8px;margin-top:14px;flex-wrap:wrap;}
-@media (max-width:520px){.retro-day{flex:0 0 82px;} .retro-day .dow{font-size:13px;} .retro-select{font-size:13px;padding:7px 6px;}}
+.retro-row{display:flex;align-items:center;gap:12px;padding:10px 20px;border-top:1px solid var(--sep);}
+.retro-day{width:92px;flex:none;display:grid;}
+.retro-day .dow{font-size:15px;}
+.retro-day .date{font-size:12px;color:var(--label2);}
+.retro-select,.grid select{flex:1;min-width:0;border:0;background:transparent;color:var(--tintText);font-size:15px;cursor:pointer;}
+.retro-actions{display:flex;gap:10px;padding:10px 20px 8px;}
+.icon-btn{border:0;background:transparent;color:var(--label2);width:34px;height:34px;border-radius:999px;display:grid;place-items:center;cursor:pointer;}
+.icon-btn:hover{background:var(--fill2);}
+.grid-wrap{background:var(--bg2);border-radius:20px;overflow-x:auto;}
+.grid{border-collapse:collapse;width:100%;font-size:13px;}
+.grid th{font-weight:600;color:var(--label2);padding:10px 4px;}
+.grid td{padding:6px 4px;border-top:1px solid var(--sep);}
+.grid select{width:100%;min-width:84px;font-size:13px;}
+.wk-label{color:var(--label2);white-space:nowrap;padding-left:14px !important;}
+.add-row{display:flex;gap:8px;}
+.add-row input{flex:1;min-width:0;font-size:17px;padding:12px 16px;border-radius:14px;border:0;background:var(--bg2);color:var(--label);}
+.lib{list-style:none;margin:0;padding:0;background:var(--bg2);border-radius:26px;overflow:hidden;}
+.lib-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:6px 10px 6px 20px;position:relative;}
+.lib-row + .lib-row::before{content:"";position:absolute;top:0;left:20px;right:0;height:1px;background:var(--sep);}
+.lib-main{flex:1;min-width:0;display:grid;gap:4px;text-align:left;border:0;background:transparent;color:inherit;padding:8px 0;cursor:pointer;}
+.lib-name{font-size:17px;}
+.chips{display:flex;flex-wrap:wrap;gap:4px;}
+.chip{font-size:12px;line-height:16px;padding:2px 8px;border-radius:999px;background:var(--fill2);color:var(--label2);}
+.chip.veg{background:color-mix(in srgb,var(--moss) 18%,transparent);color:var(--moss);}
+.chip.fish{background:color-mix(in srgb,var(--tint) 16%,transparent);color:var(--tintText);}
+.chip.treat{background:color-mix(in srgb,var(--salmon) 22%,transparent);color:var(--salmon);}
+.meal-edit{flex-basis:100%;display:grid;gap:10px;padding:4px 10px 14px 0;}
+.meal-edit label{display:grid;gap:4px;font-size:13px;color:var(--label2);}
+.meal-edit input,.meal-edit select{font-size:15px;padding:9px 12px;border-radius:10px;border:0;background:var(--fill2);color:var(--label);}
+.toggles{display:flex;flex-wrap:wrap;gap:6px;}
+.toggle{border:0;border-radius:999px;padding:6px 12px;font-size:13px;font-weight:600;background:var(--fill2);color:var(--label2);cursor:pointer;}
+.toggle.on{background:var(--tint);color:var(--onTint);}
+.ings-edit-top{display:flex;justify-content:space-between;align-items:center;}
+.suggest-btn{display:inline-flex;align-items:center;gap:4px;border:0;background:none;color:var(--tintText);font-size:13px;font-weight:600;cursor:pointer;}
+.empty{background:var(--bg2);border-radius:26px;padding:28px 20px;display:grid;gap:14px;justify-items:start;}
+.empty p{margin:0;color:var(--label2);}
 
-.ft{margin-top:30px;padding-top:16px;border-top:1px solid var(--line);font-size:12px;color:var(--ink-soft);line-height:1.5;max-width:62ch;}
-
-button:focus-visible, input:focus-visible, select:focus-visible{outline:2px solid var(--amber);outline-offset:1px;}
-
-@media (max-width:520px){
-  .hd h1{font-size:32px;}
-  .row-day{flex:0 0 64px;}
-  .dist{padding-left:114px;}
-  .cand-name{flex-basis:96px;}
-}
-@media (prefers-reduced-motion:reduce){ .bar>span{transition:none;} }
+/* Switch, as in iOS */
+.switch{position:relative;width:51px;height:31px;flex:none;}
+.switch input{position:absolute;inset:0;opacity:0;margin:0;cursor:pointer;z-index:1;}
+.switch span{position:absolute;inset:0;border-radius:999px;background:var(--fill);transition:background .25s;}
+.switch span::after{content:"";position:absolute;top:2px;left:2px;width:27px;height:27px;border-radius:999px;background:#fff;box-shadow:0 3px 8px rgba(0,0,0,.15),0 1px 1px rgba(0,0,0,.16);transition:transform .25s;}
+.switch input:checked + span{background:var(--green);}
+.switch input:checked + span::after{transform:translateX(20px);}
+@media (prefers-reduced-motion:reduce){.dfc *{transition:none !important;}}
 `;
