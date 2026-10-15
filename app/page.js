@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useMemo, useCallback } from "react";
-import { Dices, Plus, Trash2, ChevronRight, Check, Sparkles, Lock, ShoppingBasket, CalendarDays, History as HistoryIcon, UtensilsCrossed, MoreHorizontal } from "lucide-react";
+import { Dices, Plus, Trash2, ChevronLeft, ChevronRight, Check, Sparkles, Lock, ShoppingBasket, MoreHorizontal } from "lucide-react";
 
 /* Ocado has no public API: we deep-link into its search or a product page the household has linked. */
 const OCADO_SEARCH = (term) => `https://www.ocado.com/search?q=${encodeURIComponent(term)}`;
@@ -400,7 +400,9 @@ function seedData() {
 
 /* =============================== component =============================== */
 export default function DinnerForecast() {
-  const [tab, setTab] = useState("forecast");
+  const [tab, setTab] = useState("week"); // week | library | history | tune
+  const [sel, setSel] = useState(null); // selected week key (YYYY-MM-DD Monday)
+  const [menuOpen, setMenuOpen] = useState(false);
   const [library, setLibrary] = useState([]);
   const [weeks, setWeeks] = useState([]);
   const [params, setParams] = useState({ halfLife: 3, nudge: 0.35, epsilon: 0.12, repeatWindow: 3 });
@@ -419,15 +421,24 @@ export default function DinnerForecast() {
   const [showRetroConfirm, setShowRetroConfirm] = useState(false);
   const [retroConfirmed, setRetroConfirmed] = useState(false);
   const [plannedWeeks, setPlannedWeeks] = useState([]); // { weekMonday: "YYYY-MM-DD", meals: [7 ids] }[]
-  const [showPlanNext, setShowPlanNext] = useState(false);
-  const [planNextOverrides, setPlanNextOverrides] = useState({});
   const [products, setProducts] = useState({}); // ingredient key -> { url?: Ocado product link, staple?: true }
-  const [shop, setShop] = useState({ week: "", ticked: [] }); // what's already in the Ocado basket this week
+  const [shop, setShop] = useState({}); // week key -> ingredient keys already in the Ocado basket
   const [linking, setLinking] = useState(null); // ingredient key being linked to an Ocado product
   const [linkDraft, setLinkDraft] = useState("");
 
   const today = useMemo(() => new Date(), []);
-  const weekStart = useMemo(() => mondayOfWeek(today, plannedWeeks.length), [today, plannedWeeks.length]);
+  const thisMonday = useMemo(() => mondayOfWeek(today, 0), [today]);
+  /* planned weeks by Monday; the forecast ("draft") week is the first Monday from this week on that isn't planned */
+  const plannedByKey = useMemo(() => {
+    const out = {};
+    plannedWeeks.forEach((p, idx) => { out[isoLocal(normMonday(p.weekMonday))] = idx; });
+    return out;
+  }, [plannedWeeks]);
+  const weekStart = useMemo(() => {
+    const d = new Date(thisMonday);
+    while (plannedByKey[isoLocal(d)] !== undefined) d.setDate(d.getDate() + 7);
+    return d;
+  }, [thisMonday, plannedByKey]);
   const retroWeekStart = useMemo(() => mondayOfWeek(today, -1), [today]);
 
   /* load once from Supabase; seed on first run */
@@ -440,17 +451,19 @@ export default function DinnerForecast() {
         let pw = Array.isArray(st.plannedWeeks) ? st.plannedWeeks : [];
         // Graduate any planned weeks whose Monday has already passed into history
         const thisMonday = mondayOfWeek(new Date(), 0);
-        const graduating = pw.filter((p) => new Date(p.weekMonday + "T00:00:00") < thisMonday);
-        const remaining = pw.filter((p) => new Date(p.weekMonday + "T00:00:00") >= thisMonday);
+        pw = pw.map((p) => ({ ...p, weekMonday: isoLocal(normMonday(p.weekMonday)) }));
+        const graduating = pw.filter((p) => normMonday(p.weekMonday) < thisMonday);
+        const remaining = pw.filter((p) => normMonday(p.weekMonday) >= thisMonday);
         if (graduating.length) {
-          graduating.sort((a, b) => new Date(a.weekMonday) - new Date(b.weekMonday));
+          graduating.sort((a, b) => normMonday(a.weekMonday) - normMonday(b.weekMonday));
           hist = [...graduating.map((p) => p.meals).reverse(), ...hist];
         }
         setWeeks(hist);
         setPlannedWeeks(remaining);
         if (st.params) setParams((p) => ({ ...p, ...st.params }));
         if (st.products && typeof st.products === "object") setProducts(st.products);
-        if (st.shop && Array.isArray(st.shop.ticked)) setShop(st.shop);
+        if (st.shop && Array.isArray(st.shop.ticked)) setShop(st.shop.week ? { [isoLocal(normMonday(st.shop.week))]: st.shop.ticked } : {});
+        else if (st.shop && typeof st.shop === "object") setShop(st.shop);
       } else if (!(st && st.cleared)) {
         const { lib: el, weeks: ew } = seedData();
         setLibrary(el);
@@ -494,13 +507,40 @@ export default function DinnerForecast() {
   const byId = useMemo(() => Object.fromEntries(library.map((m) => [m.id, m])), [library]);
 
 
-  /* the week's ingredients, deduplicated, with which nights need them and how to find them on Ocado */
-  const weekKey = useMemo(() => weekStart.toISOString().split("T")[0], [weekStart]);
-  const ticked = useMemo(() => new Set(shop.week === weekKey ? shop.ticked : []), [shop, weekKey]);
+  /* every week you can step through: logged past weeks, confirmed weeks, and the one being forecast */
+  const weekList = useMemo(() => {
+    const out = [];
+    const nPast = Math.min(weeks.length, 12);
+    for (let k = 0; k < nPast; k++) {
+      const d = new Date(thisMonday);
+      d.setDate(d.getDate() - 7 * (k + 1));
+      out.push({ key: isoLocal(d), monday: d, kind: "past", idx: k });
+    }
+    plannedWeeks.forEach((p, idx) => {
+      const d = normMonday(p.weekMonday);
+      if (d >= thisMonday) out.push({ key: isoLocal(d), monday: d, kind: "planned", idx });
+    });
+    out.push({ key: isoLocal(weekStart), monday: weekStart, kind: "draft" });
+    return out.sort((x, y) => x.monday - y.monday);
+  }, [weeks.length, plannedWeeks, thisMonday, weekStart]);
+  const sw = useMemo(() => {
+    const byKey = weekList.find((w) => w.key === sel);
+    return byKey || weekList.find((w) => w.key === isoLocal(thisMonday)) || weekList[weekList.length - 1];
+  }, [weekList, sel, thisMonday]);
+  const swPos = weekList.indexOf(sw);
+  const swMeals = useMemo(() => {
+    if (sw.kind === "draft") return plan.map((d, i) => overrides[i] ?? d.mealId);
+    if (sw.kind === "planned") return plannedWeeks[sw.idx]?.meals || Array(7).fill("");
+    return weeks[sw.idx] || Array(7).fill("");
+  }, [sw, plan, overrides, plannedWeeks, weeks]);
+  const swDates = useMemo(() => Array.from({ length: 7 }, (_, i) => { const d = new Date(sw.monday); d.setDate(d.getDate() + i); return d; }), [sw]);
+
+  /* that week's ingredients, deduplicated, with which nights need them and how to find them on Ocado */
+  const ticked = useMemo(() => new Set(shop[sw.key] || []), [shop, sw]);
   const basket = useMemo(() => {
     const map = new Map();
-    plan.forEach((d, i) => {
-      const m = byId[overrides[i] ?? d.mealId];
+    swMeals.forEach((id, i) => {
+      const m = byId[id];
       if (!m || m.isSkip) return;
       (m.ingredients || []).forEach((ing) => {
         const k = ingKey(ing);
@@ -515,7 +555,7 @@ export default function DinnerForecast() {
       const staple = p.staple ?? LIKELY_STAPLE.test(it.key);
       return { ...it, url: p.url || "", staple, href: p.url || OCADO_SEARCH(it.label), got: ticked.has(it.key) };
     });
-  }, [plan, overrides, byId, products, ticked]);
+  }, [swMeals, byId, products, ticked]);
   const toBuy = basket.filter((x) => !x.staple);
   const cupboard = basket.filter((x) => x.staple);
   const nextToAdd = toBuy.find((x) => !x.got);
@@ -523,11 +563,11 @@ export default function DinnerForecast() {
 
   const setTick = useCallback((k, on) => {
     setShop((sh) => {
-      const cur = new Set(sh.week === weekKey ? sh.ticked : []);
+      const cur = new Set(sh[sw.key] || []);
       on ? cur.add(k) : cur.delete(k);
-      return { week: weekKey, ticked: [...cur] };
+      return { ...sh, [sw.key]: [...cur] };
     });
-  }, [weekKey]);
+  }, [sw]);
   const setProduct = (k, patch) =>
     setProducts((P) => {
       const n = { ...(P[k] || {}), ...patch };
@@ -565,10 +605,10 @@ export default function DinnerForecast() {
      pushing older weeks down, then roll forward to plan the next week */
   const confirmWeek = useCallback(() => {
     if (!plan.length) return;
-    const weekMonday = weekStart.toISOString().split("T")[0];
+    const weekMonday = isoLocal(weekStart);
     const meals = plan.map((d, i) => overrides[i] ?? d.mealId);
     setPlannedWeeks((pw) => [...pw, { weekMonday, meals }]);
-    setShop({ week: "", ticked: [] });
+    setSel(weekMonday);
     setOpenDay(null);
     setOverrides({});
     setLockedDays({});
@@ -576,15 +616,6 @@ export default function DinnerForecast() {
     setConfirmed(true);
     setTimeout(() => setConfirmed(false), 2400);
   }, [plan, overrides, weekStart]);
-
-  const confirmPlanNext = useCallback(() => {
-    if (!plan.length) return;
-    const weekMonday = weekStart.toISOString().split("T")[0];
-    const meals = plan.map((d, i) => planNextOverrides[i] ?? d.mealId);
-    setPlannedWeeks((pw) => [...pw, { weekMonday, meals }]);
-    setShowPlanNext(false);
-    setPlanNextOverrides({});
-  }, [plan, planNextOverrides, weekStart]);
 
   const confirmRetroWeek = useCallback(() => {
     if (!retroPlan.length) return;
@@ -655,6 +686,7 @@ export default function DinnerForecast() {
     setPlannedWeeks([]);
     setTab("library");
   };
+  const unplanWeek = (idx) => { removePlannedWeek(idx); setOpenDay(null); };
 
   if (!loaded) return <div className="loading">Loading the almanac…</div>;
 
@@ -672,117 +704,138 @@ export default function DinnerForecast() {
     });
     setSeed((s) => s + 1);
   };
-  const swapTo = (i, d, id) =>
-    setOverrides((o) => {
-      const n = { ...o };
-      if (id === d.mealId) delete n[i];
-      else n[i] = id;
-      return n;
-    });
-  const range = plan.length ? `${fmt(plan[0].date)} to ${fmt(plan[plan.length - 1].date)}` : "";
-  const TABS = [
-    ["forecast", "This week", <CalendarDays key="i" size={22} />],
-    ["shop", "Shop", <ShoppingBasket key="i" size={22} />],
-    ["history", "History", <HistoryIcon key="i" size={22} />],
-    ["library", "Meals", <UtensilsCrossed key="i" size={22} />],
-  ];
-  const TITLE = { forecast: "This week", shop: "Shop", history: "History", library: "Meals" };
-  const SUB = {
-    forecast: range,
-    shop: plan.length ? `For dinners ${fmt(plan[0].date)} to ${fmt(plan[plan.length - 1].date)}` : "",
-    history: "What you actually ate. The forecast learns from it.",
-    library: `${library.length} dinners`,
+  /* change one night of the selected week, whichever kind of week it is */
+  const setNight = (i, id) => {
+    if (sw.kind === "draft") {
+      const d = plan[i];
+      setOverrides((o) => {
+        const n = { ...o };
+        if (d && id === d.mealId) delete n[i];
+        else n[i] = id;
+        return n;
+      });
+    } else if (sw.kind === "planned") setPlannedCell(sw.idx, i, id);
+    else setCell(sw.idx, i, id);
   };
+  const go = (pos) => { const w = weekList[pos]; if (w) { setSel(w.key); setOpenDay(null); setLinking(null); } };
+  const openPage = (t) => { setTab(t); setMenuOpen(false); window.scrollTo(0, 0); };
+  const STATUS = { past: "What you ate", planned: "Confirmed", draft: "Forecast. Swap anything, then confirm" };
+  const range = `${fmt(swDates[0])} to ${fmt(swDates[6])}`;
+  const PAGE = { library: "Meals", history: "Past weeks", tune: "Tune the forecast" };
 
   return (
     <div className="dfc">
       <style>{CSS}</style>
 
-      <nav className="tabbar" role="tablist" aria-label="Sections">
-        {TABS.map(([k, label, icon]) => (
-          <button
-            key={k}
-            role="tab"
-            aria-selected={tab === k}
-            className="tab"
-            onClick={() => { setTab(k); setOpenDay(null); window.scrollTo(0, 0); }}
-          >
-            {icon}
-            <span>{label}</span>
+      <div className="topbar">
+        {tab !== "week" ? (
+          <button className="backBtn" onClick={() => openPage("week")}>
+            <ChevronLeft size={20} /> {weekName(sw.monday, thisMonday)}
           </button>
-        ))}
-      </nav>
+        ) : (
+          <span />
+        )}
+        <div className="menuWrap">
+          <button className="menuBtn" aria-label="More" aria-expanded={menuOpen} onClick={() => setMenuOpen((o) => !o)}>
+            <MoreHorizontal size={20} />
+          </button>
+          {menuOpen && (
+            <div className="menu" role="menu">
+              <button role="menuitem" onClick={() => openPage("library")}>Meals</button>
+              <button role="menuitem" onClick={() => openPage("history")}>Past weeks</button>
+              <button role="menuitem" onClick={() => openPage("tune")}>Tune the forecast</button>
+            </div>
+          )}
+        </div>
+      </div>
 
-      <div className="wrap">
-        <header className="head">
-          <h1 className="largeTitle">{TITLE[tab]}</h1>
-          <p className="footnote">
-            {SUB[tab]}
-            {saveStatus === "error" && <span className="save-status error">. Couldn&rsquo;t save</span>}
-          </p>
-        </header>
+      <div className="wrap" onClick={() => menuOpen && setMenuOpen(false)}>
+      {tab === "week" && (
+        <>
+          <header className="weekHead">
+            <div className="weekTitle">
+              <h1 className="largeTitle">{weekName(sw.monday, thisMonday)}</h1>
+              <p className="footnote">
+                {range}. {STATUS[sw.kind]}
+                {saveStatus === "error" && <span className="save-status error">. Couldn&rsquo;t save</span>}
+              </p>
+            </div>
+            <div className="weekNav" role="group" aria-label="Choose week">
+              <button aria-label="Previous week" disabled={swPos <= 0} onClick={() => go(swPos - 1)}><ChevronLeft size={20} /></button>
+              <button aria-label="Next week" disabled={swPos >= weekList.length - 1} onClick={() => go(swPos + 1)}><ChevronRight size={20} /></button>
+            </div>
+          </header>
 
-      {tab === "forecast" && (
-        <section className="panel">
           {!hasData ? (
             <div className="empty">
               <p>Add the dinners you usually make, and the forecast starts from there.</p>
-              <button className="btn primary" onClick={() => setTab("library")}>Add dinners</button>
+              <button className="btn primary" onClick={() => openPage("library")}>Add dinners</button>
             </div>
           ) : (
-            <>
-              {confirmed && <div className="banner">Week confirmed. Now planning the week of {fmtDM(weekStart)}.</div>}
-              {weeks.length === 0 && (
-                <p className="gf">No history yet, so this is a shuffle of your meals. Log a few weeks under History.</p>
+            <section className="panel">
+              {confirmed && sw.kind === "planned" && (
+                <div className="banner">
+                  Week confirmed. Shop for it below, or{" "}
+                  <button className="inlineLink" onClick={() => go(weekList.length - 1)}>plan the next one</button>.
+                </div>
+              )}
+              {weeks.length === 0 && sw.kind === "draft" && (
+                <p className="gf">No history yet, so this is a shuffle of your meals. Log a few weeks under Past weeks.</p>
               )}
 
+              <h2 className="secTitle">Dinners</h2>
               <ul className="list days">
-                {plan.map((d, i) => {
-                  const did = overrides[i] ?? d.mealId;
-                  const meal = byId[did];
+                {swMeals.map((id, i) => {
+                  const meal = byId[id];
+                  const d = sw.kind === "draft" ? plan[i] : null;
                   const open = openDay === i;
                   return (
                     <li key={i} className={open ? "open" : ""}>
                       <button className="li dayRow" aria-expanded={open} onClick={() => setOpenDay(open ? null : i)}>
                         <span className="dayCol">
-                          <b>{DAY_FULL[d.dow].slice(0, 3)}</b>
-                          <small>{d.date.getDate()}</small>
+                          <b>{DAY_FULL[i].slice(0, 3)}</b>
+                          <small>{swDates[i].getDate()}</small>
                         </span>
                         <span className="lab">
-                          <span className="meal">{meal ? meal.name : "Nothing planned"}</span>
+                          <span className={meal ? "meal" : "meal empty"}>{meal ? meal.name : "Nothing planned"}</span>
                         </span>
-                        {lockedDays[i] && <Lock size={14} className="lockIc" aria-label="Kept" />}
+                        {sw.kind === "draft" && lockedDays[i] && <Lock size={14} className="lockIc" aria-label="Kept" />}
                         <ChevronRight size={16} className="chev" />
                       </button>
                       {open && (
                         <div className="dayMore">
-                          <p className="moreHead">Likely for {DAY_FULL[d.dow]}</p>
-                          <div className="alts">
-                            {d.candidates.map((c) => (
-                              <button key={c.id} className={c.id === did ? "alt on" : "alt"} onClick={() => swapTo(i, d, c.id)}>
-                                <span>{byId[c.id]?.name || "Nothing"}</span>
-                                <span className="pct">{Math.round(c.p * 100)}%</span>
-                              </button>
-                            ))}
-                          </div>
+                          {d && (
+                            <>
+                              <p className="moreHead">Likely for {DAY_FULL[i]}</p>
+                              <div className="alts">
+                                {d.candidates.map((c) => (
+                                  <button key={c.id} className={c.id === id ? "alt on" : "alt"} onClick={() => setNight(i, c.id)}>
+                                    <span>{byId[c.id]?.name || "Nothing"}</span>
+                                    <span className="pct">{Math.round(c.p * 100)}%</span>
+                                  </button>
+                                ))}
+                              </div>
+                            </>
+                          )}
                           <label className="row2">
-                            <span>Something else</span>
-                            <select value={did} onChange={(e) => swapTo(i, d, e.target.value)}>
+                            <span>{d ? "Something else" : "Change to"}</span>
+                            <select value={id} onChange={(e) => setNight(i, e.target.value)}>
+                              <option value="">Nothing planned</option>
                               {library.map((m) => (
                                 <option key={m.id} value={m.id}>{m.name}</option>
                               ))}
                             </select>
                           </label>
-                          <label className="row2">
-                            <span>Keep when re-rolling</span>
-                            <span className="switch">
-                              <input type="checkbox" role="switch" checked={!!lockedDays[i]} onChange={() => toggleLock(i)} />
-                              <span />
-                            </span>
-                          </label>
-                          {meal?.ingredients?.length > 0 && (
-                            <p className="ingsLine">Needs {meal.ingredients.join(", ")}</p>
+                          {d && (
+                            <label className="row2">
+                              <span>Keep when re-rolling</span>
+                              <span className="switch">
+                                <input type="checkbox" role="switch" checked={!!lockedDays[i]} onChange={() => toggleLock(i)} />
+                                <span />
+                              </span>
+                            </label>
                           )}
+                          {meal?.ingredients?.length > 0 && <p className="ingsLine">Needs {meal.ingredients.join(", ")}</p>}
                         </div>
                       )}
                     </li>
@@ -790,151 +843,168 @@ export default function DinnerForecast() {
                 })}
               </ul>
 
-              <div className="actions">
-                <button className="btn" onClick={reroll}><Dices size={16} /> Re-roll</button>
-                <button className="btn primary" onClick={confirmWeek}><Check size={16} /> Confirm week</button>
-              </div>
-              <p className="gf">Confirming logs the week, so next week&rsquo;s forecast learns from it.</p>
-
-              <details className="group model">
-                <summary className="gh">Tune the forecast<ChevronRight size={14} className="chev" /></summary>
-                <div className="list padded">
-                  <Slider
-                    label="Recent weeks count more"
-                    hint={`Older weeks fade by half every ${params.halfLife} ${params.halfLife === 1 ? "week" : "weeks"}`}
-                    min={0.5} max={8} step={0.5} value={params.halfLife}
-                    onChange={(v) => setParams((p) => ({ ...p, halfLife: v }))}
-                    fmt={(v) => `${v} wk`}
-                  />
-                  <Slider
-                    label="Nudge towards balance"
-                    hint={params.nudge < 0.03 ? "Off: pure prediction" : "Leans towards veg, and away from a second treat night"}
-                    min={0} max={1} step={0.05} value={params.nudge}
-                    onChange={(v) => setParams((p) => ({ ...p, nudge: v }))}
-                    fmt={(v) => `${Math.round(v * 100)}%`}
-                  />
-                  <Slider
-                    label="Try something different"
-                    hint="Chance of a dinner you've not had lately"
-                    min={0} max={0.4} step={0.02} value={params.epsilon}
-                    onChange={(v) => setParams((p) => ({ ...p, epsilon: v }))}
-                    fmt={(v) => `${Math.round(v * 100)}%`}
-                  />
-                  <Slider
-                    label="Don't repeat within"
-                    hint="Days before a dinner can come back"
-                    min={0} max={6} step={1} value={params.repeatWindow}
-                    onChange={(v) => setParams((p) => ({ ...p, repeatWindow: v }))}
-                    fmt={(v) => `${v} ${v === 1 ? "day" : "days"}`}
-                  />
+              {sw.kind === "draft" && (
+                <div className="actions">
+                  <button className="btn" onClick={reroll}><Dices size={16} /> Re-roll</button>
+                  <button className="btn primary" onClick={confirmWeek}><Check size={16} /> Confirm week</button>
                 </div>
-              </details>
-            </>
-          )}
-        </section>
-      )}
-
-      {tab === "shop" && (
-        <section className="panel">
-          {toBuy.length === 0 ? (
-            <p className="gf">Nothing to buy for this week&rsquo;s dinners.</p>
-          ) : (
-            <>
-              <div className="meterRow">
-                <span>{inBasket} of {toBuy.length} in your Ocado basket</span>
-                <div className="meter" aria-hidden="true"><i style={{ width: `${(inBasket / toBuy.length) * 100}%` }} /></div>
-              </div>
-              {nextToAdd ? (
-                <button className="btn primary wide" onClick={openNext}>
-                  <ShoppingBasket size={17} /> Next on Ocado: {nextToAdd.label}
-                </button>
-              ) : (
-                <div className="banner">Everything&rsquo;s in the basket. Book a slot on Ocado and you&rsquo;re done.</div>
+              )}
+              {sw.kind === "planned" && (
+                <div className="actions">
+                  <button className="textBtn" onClick={() => unplanWeek(sw.idx)}>Go back to the forecast for this week</button>
+                </div>
               )}
 
-              <ul className="list basket">
-                {toBuy.map((it) => (
-                  <li key={it.key} className={it.got ? "got" : ""}>
-                    <div className="li">
-                      <button
-                        className="tick"
-                        aria-pressed={it.got}
-                        aria-label={`${it.label}: ${it.got ? "in basket" : "not in basket"}`}
-                        onClick={() => setTick(it.key, !it.got)}
-                      >
-                        <Check size={14} />
-                      </button>
-                      <a className="lab" href={it.href} target="ocado" rel="noopener noreferrer" onClick={() => setTick(it.key, true)}>
-                        <span className="meal">{it.label}</span>
-                        <span className="sub">
-                          {it.days.map((d) => DAY_FULL[d].slice(0, 3)).join(", ")}
-                          {it.url ? ". Your usual product" : ""}
-                        </span>
-                      </a>
-                      <button
-                        className="more"
-                        aria-expanded={linking === it.key}
-                        aria-label={`Options for ${it.label}`}
-                        onClick={() => { setLinking(linking === it.key ? null : it.key); setLinkDraft(it.url); }}
-                      >
-                        <MoreHorizontal size={18} />
-                      </button>
-                    </div>
-                    {linking === it.key && (
-                      <div className="itemMore">
-                        <label className="linkRow">
-                          <span>Your usual Ocado product</span>
-                          <span className="linkField">
-                            <input
-                              autoFocus
-                              placeholder="Paste the product link"
-                              value={linkDraft}
-                              onChange={(e) => setLinkDraft(e.target.value)}
-                              onKeyDown={(e) => e.key === "Enter" && saveLink(it.key)}
-                            />
-                            <button className="btn small" onClick={() => saveLink(it.key)}>Save</button>
-                          </span>
-                        </label>
-                        {linkDraft.trim() && !OCADO_PRODUCT.test(linkDraft.trim().split("?")[0]) && (
-                          <span className="err">That isn&rsquo;t an Ocado product link.</span>
-                        )}
-                        <button className="textBtn" onClick={() => { setProduct(it.key, { staple: true }); setLinking(null); }}>
-                          We always have this
-                        </button>
+              {sw.kind !== "past" && (
+                <>
+                  <h2 className="secTitle">Shopping</h2>
+                  {toBuy.length === 0 ? (
+                    <p className="gf">Nothing to buy for these dinners.</p>
+                  ) : (
+                    <>
+                      <div className="meterRow">
+                        <span>{inBasket} of {toBuy.length} in your Ocado basket</span>
+                        <div className="meter" aria-hidden="true"><i style={{ width: `${(inBasket / toBuy.length) * 100}%` }} /></div>
                       </div>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            </>
-          )}
+                      {nextToAdd ? (
+                        <button className="btn primary wide" onClick={openNext}>
+                          <ShoppingBasket size={17} /> Next on Ocado: {nextToAdd.label}
+                        </button>
+                      ) : (
+                        <div className="banner">Everything&rsquo;s in the basket. Book a slot on Ocado and you&rsquo;re done.</div>
+                      )}
 
-          {cupboard.length > 0 && (
-            <details className="group">
-              <summary className="gh">Check the cupboard ({cupboard.length})<ChevronRight size={14} className="chev" /></summary>
-              <ul className="list">
-                {cupboard.map((it) => (
-                  <li key={it.key}>
-                    <div className="li">
-                      <span className="lab">
-                        <span className="meal">{it.label}</span>
-                        <span className="sub">{it.days.map((d) => DAY_FULL[d].slice(0, 3)).join(", ")}</span>
-                      </span>
-                      <button className="textBtn" onClick={() => setProduct(it.key, { staple: false })}>Add to list</button>
+                      <ul className="list basket">
+                        {toBuy.map((it) => (
+                          <li key={it.key} className={it.got ? "got" : ""}>
+                            <div className="li">
+                              <button
+                                className="tick"
+                                aria-pressed={it.got}
+                                aria-label={`${it.label}: ${it.got ? "in basket" : "not in basket"}`}
+                                onClick={() => setTick(it.key, !it.got)}
+                              >
+                                <Check size={14} />
+                              </button>
+                              <a className="lab" href={it.href} target="ocado" rel="noopener noreferrer" onClick={() => setTick(it.key, true)}>
+                                <span className="meal">{it.label}</span>
+                                <span className="sub">
+                                  {it.days.map((x) => DAY_FULL[x].slice(0, 3)).join(", ")}
+                                  {it.url ? ". Your usual product" : ""}
+                                </span>
+                              </a>
+                              <button
+                                className="more"
+                                aria-expanded={linking === it.key}
+                                aria-label={`Options for ${it.label}`}
+                                onClick={() => { setLinking(linking === it.key ? null : it.key); setLinkDraft(it.url); }}
+                              >
+                                <MoreHorizontal size={18} />
+                              </button>
+                            </div>
+                            {linking === it.key && (
+                              <div className="itemMore">
+                                <label className="linkRow">
+                                  <span>Your usual Ocado product</span>
+                                  <span className="linkField">
+                                    <input
+                                      autoFocus
+                                      placeholder="Paste the product link"
+                                      value={linkDraft}
+                                      onChange={(e) => setLinkDraft(e.target.value)}
+                                      onKeyDown={(e) => e.key === "Enter" && saveLink(it.key)}
+                                    />
+                                    <button className="btn small" onClick={() => saveLink(it.key)}>Save</button>
+                                  </span>
+                                </label>
+                                {linkDraft.trim() && !OCADO_PRODUCT.test(linkDraft.trim().split("?")[0]) && (
+                                  <span className="err">That isn&rsquo;t an Ocado product link.</span>
+                                )}
+                                <button className="textBtn" onClick={() => { setProduct(it.key, { staple: true }); setLinking(null); }}>
+                                  We always have this
+                                </button>
+                              </div>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    </>
+                  )}
+
+                  {cupboard.length > 0 && (
+                    <details className="group">
+                      <summary className="gh">Check the cupboard ({cupboard.length})<ChevronRight size={14} className="chev" /></summary>
+                      <ul className="list">
+                        {cupboard.map((it) => (
+                          <li key={it.key}>
+                            <div className="li">
+                              <span className="lab">
+                                <span className="meal">{it.label}</span>
+                                <span className="sub">{it.days.map((x) => DAY_FULL[x].slice(0, 3)).join(", ")}</span>
+                              </span>
+                              <button className="textBtn" onClick={() => setProduct(it.key, { staple: false })}>Add to list</button>
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    </details>
+                  )}
+
+                  {toBuy.length > 0 && (
+                    <div className="actions">
+                      <button className="btn" onClick={copyList}>{copied ? "Copied" : "Copy list"}</button>
                     </div>
-                  </li>
-                ))}
-              </ul>
-            </details>
+                  )}
+                  <p className="gf">
+                    Ocado doesn&rsquo;t let other apps fill your basket, so each item opens Ocado for you to add.
+                    Paste your usual product link once (the ••• button) and it opens straight to it after that.
+                  </p>
+                </>
+              )}
+            </section>
           )}
+        </>
+      )}
 
-          <div className="actions">
-            <button className="btn" onClick={copyList}>{copied ? "Copied" : "Copy list"}</button>
+      {tab !== "week" && (
+        <header className="head">
+          <h1 className="largeTitle">{PAGE[tab]}</h1>
+        </header>
+      )}
+
+      {tab === "tune" && (
+        <section className="panel">
+          <div className="list padded">
+            <Slider
+              label="Recent weeks count more"
+              hint={`Older weeks fade by half every ${params.halfLife} ${params.halfLife === 1 ? "week" : "weeks"}`}
+              min={0.5} max={8} step={0.5} value={params.halfLife}
+              onChange={(v) => setParams((p) => ({ ...p, halfLife: v }))}
+              fmt={(v) => `${v} wk`}
+            />
+            <Slider
+              label="Nudge towards balance"
+              hint={params.nudge < 0.03 ? "Off: pure prediction" : "Leans towards veg, and away from a second treat night"}
+              min={0} max={1} step={0.05} value={params.nudge}
+              onChange={(v) => setParams((p) => ({ ...p, nudge: v }))}
+              fmt={(v) => `${Math.round(v * 100)}%`}
+            />
+            <Slider
+              label="Try something different"
+              hint="Chance of a dinner you've not had lately"
+              min={0} max={0.4} step={0.02} value={params.epsilon}
+              onChange={(v) => setParams((p) => ({ ...p, epsilon: v }))}
+              fmt={(v) => `${Math.round(v * 100)}%`}
+            />
+            <Slider
+              label="Don't repeat within"
+              hint="Days before a dinner can come back"
+              min={0} max={6} step={1} value={params.repeatWindow}
+              onChange={(v) => setParams((p) => ({ ...p, repeatWindow: v }))}
+              fmt={(v) => `${v} ${v === 1 ? "day" : "days"}`}
+            />
           </div>
-          <p className="gf">
-            Ocado doesn&rsquo;t let other apps fill your basket, so each item opens Ocado for you to add.
-            Paste your usual product link once (the ••• button) and it opens straight to it after that.
-          </p>
+          <p className="gf">These shape the forecast for the next week you haven&rsquo;t confirmed.</p>
         </section>
       )}
 
@@ -943,116 +1013,6 @@ export default function DinnerForecast() {
           {hasData && (
             <>
               <div className="sec-head">
-                <h2>Upcoming</h2>
-                {!showPlanNext && (
-                  <button className="btn ghost" onClick={() => setShowPlanNext(true)}>
-                    <Plus size={15} /> Plan a week
-                  </button>
-                )}
-              </div>
-              <p className="note">
-                Weeks you&rsquo;ve planned ahead. This week always shows the next unplanned week.
-              </p>
-
-              {showPlanNext && (
-                <div className="retro-confirm">
-                  <div className="retro-range">
-                    {plan.length ? `${fmt(plan[0].date)} – ${fmt(plan[plan.length - 1].date)}` : ""}
-                  </div>
-                  <ol className="retro-list">
-                    {plan.map((d, i) => {
-                      const did = planNextOverrides[i] ?? d.mealId;
-                      return (
-                        <li key={i} className="retro-row">
-                          <div className="retro-day">
-                            <span className="dow">{DAY_FULL[d.dow]}</span>
-                            <span className="date">{fmtDM(d.date)}</span>
-                          </div>
-                          <select
-                            className="retro-select"
-                            value={did}
-                            onChange={(e) => {
-                              const v = e.target.value;
-                              setPlanNextOverrides((o) => {
-                                const next = { ...o };
-                                if (v === d.mealId) delete next[i];
-                                else next[i] = v;
-                                return next;
-                              });
-                            }}
-                          >
-                            <option value="">—</option>
-                            {library.map((m) => (
-                              <option key={m.id} value={m.id}>{m.name}</option>
-                            ))}
-                          </select>
-                        </li>
-                      );
-                    })}
-                  </ol>
-                  <div className="retro-actions">
-                    <button className="btn cta" onClick={confirmPlanNext}>
-                      <Check size={15} /> Lock in week
-                    </button>
-                    <button
-                      className="btn ghost"
-                      onClick={() => { setShowPlanNext(false); setPlanNextOverrides({}); }}
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {plannedWeeks.map((pw, wi) => {
-                const pwStart = new Date(pw.weekMonday + "T00:00:00");
-                const pwEnd = new Date(pwStart);
-                pwEnd.setDate(pwEnd.getDate() + 6);
-                return (
-                  <div key={wi} className="planned-week">
-                    <div className="planned-week-head">
-                      <span className="retro-range">{fmt(pwStart)} – {fmt(pwEnd)}</span>
-                      <button
-                        className="icon-btn"
-                        onClick={() => removePlannedWeek(wi)}
-                        aria-label="Remove planned week"
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    </div>
-                    <ol className="retro-list">
-                      {pw.meals.map((mealId, di) => {
-                        const d = new Date(pwStart);
-                        d.setDate(d.getDate() + di);
-                        return (
-                          <li key={di} className="retro-row">
-                            <div className="retro-day">
-                              <span className="dow">{DAY_FULL[di]}</span>
-                              <span className="date">{fmtDM(d)}</span>
-                            </div>
-                            <select
-                              className="retro-select"
-                              value={mealId}
-                              onChange={(e) => setPlannedCell(wi, di, e.target.value)}
-                            >
-                              <option value="">—</option>
-                              {library.map((m) => (
-                                <option key={m.id} value={m.id}>{m.name}</option>
-                              ))}
-                            </select>
-                          </li>
-                        );
-                      })}
-                    </ol>
-                  </div>
-                );
-              })}
-
-              {!plannedWeeks.length && !showPlanNext && (
-                <p className="muted pad">No weeks planned ahead yet.</p>
-              )}
-
-              <div className="sec-head mt">
                 <h2>Last week</h2>
                 {!showRetroConfirm && (
                   <button className="btn" onClick={() => setShowRetroConfirm(true)}>
@@ -1306,6 +1266,24 @@ export default function DinnerForecast() {
   );
 }
 
+/* dates as local YYYY-MM-DD (toISOString shifts to UTC and lands on Sunday during BST) */
+function isoLocal(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+/* the Monday a stored week key refers to; older keys were saved as the UTC Sunday before */
+function normMonday(iso) {
+  const d = new Date(iso + "T12:00:00");
+  if (d.getDay() === 0) d.setDate(d.getDate() + 1);
+  return mondayOfWeek(d, 0);
+}
+function weekName(monday, thisMonday) {
+  const diff = Math.round((monday - thisMonday) / (7 * 86400000));
+  if (diff === 0) return "This week";
+  if (diff === 1) return "Next week";
+  if (diff === -1) return "Last week";
+  return `Week of ${fmtDM(monday)}`;
+}
+
 function fmt(d) {
   return d.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" }).replace(/,/g, "");
 }
@@ -1383,25 +1361,35 @@ const CSS = `
 .dfc :focus-visible{outline:3px solid color-mix(in srgb,var(--tint) 60%,transparent);outline-offset:2px;border-radius:8px;}
 .loading{font-family:-apple-system,system-ui,sans-serif;padding:80px 20px;text-align:center;color:rgba(60,60,67,.6);}
 
-.wrap{max-width:720px;margin:0 auto;padding:12px 16px calc(env(safe-area-inset-bottom,0px) + 120px);}
-@media (min-width:900px){.wrap{padding-top:88px;padding-bottom:64px;}}
+.wrap{max-width:720px;margin:0 auto;padding:4px 16px calc(env(safe-area-inset-bottom,0px) + 48px);}
 .head{display:grid;gap:2px;padding:8px 4px 16px;}
 .head .footnote{font-size:15px;line-height:20px;}
 .largeTitle{font-family:var(--fd);font-size:34px;line-height:41px;font-weight:700;letter-spacing:.01em;margin:0;}
 .footnote{font-size:13px;line-height:18px;color:var(--label2);margin:0;}
 .save-status.error{color:var(--redText);}
 
-/* Floating Liquid Glass tab bar: bottom on phones, top on wide screens */
-.tabbar{position:fixed;z-index:6;left:50%;transform:translateX(-50%);bottom:calc(env(safe-area-inset-bottom,0px) + 14px);
-  display:flex;gap:2px;padding:4px;border-radius:999px;background:var(--glass);
-  backdrop-filter:blur(22px) saturate(190%);-webkit-backdrop-filter:blur(22px) saturate(190%);
-  border:1px solid var(--glassEdge);box-shadow:var(--glassShadow),inset 0 1px 0 rgba(255,255,255,.35);}
-@media (min-width:900px){.tabbar{bottom:auto;top:18px;}}
-.tab{display:grid;justify-items:center;gap:1px;min-width:76px;padding:7px 12px 6px;border:0;border-radius:999px;background:transparent;color:var(--label);cursor:pointer;font-size:10px;line-height:12px;font-weight:600;transition:background .25s,transform .25s;}
-.tab svg{width:22px;height:22px;}
-.tab[aria-selected="true"]{background:var(--sel);color:var(--tint);}
-.tab:active{transform:scale(.94);}
-@media (min-width:900px){.tab{grid-auto-flow:column;gap:6px;align-items:center;font-size:15px;line-height:20px;padding:8px 16px;}.tab svg{width:19px;height:19px;}}
+/* Top bar: back on menu pages, ••• for Meals, Past weeks and Tune */
+.topbar{position:sticky;top:0;z-index:6;display:flex;justify-content:space-between;align-items:center;max-width:720px;margin:0 auto;padding:calc(env(safe-area-inset-top,0px) + 6px) 10px 6px;background:color-mix(in srgb,var(--bg) 82%,transparent);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);}
+.backBtn{display:inline-flex;align-items:center;gap:2px;border:0;background:none;color:var(--tintText);font-size:17px;cursor:pointer;padding:6px 4px;}
+.menuWrap{position:relative;}
+.menuBtn{width:38px;height:38px;border-radius:999px;border:0;background:var(--fill2);color:var(--tintText);display:grid;place-items:center;cursor:pointer;}
+.menuBtn[aria-expanded="true"]{background:color-mix(in srgb,var(--tint) 18%,var(--bg2));}
+.menu{position:absolute;right:0;top:46px;min-width:210px;background:var(--bg2);border-radius:14px;box-shadow:0 12px 40px rgba(0,0,0,.18),0 0 0 1px var(--sep);padding:6px;display:grid;}
+.menu button{border:0;background:none;text-align:left;font-size:17px;color:var(--label);padding:11px 14px;border-radius:9px;cursor:pointer;}
+.menu button:hover{background:var(--fill2);}
+
+/* Week header: big title, with the week stepper beside it */
+.weekHead{display:flex;justify-content:space-between;align-items:flex-end;gap:12px;padding:0 4px 18px;}
+.weekTitle{display:grid;gap:2px;min-width:0;}
+.weekTitle .footnote{font-size:15px;line-height:20px;}
+.weekNav{display:flex;gap:2px;background:var(--fill2);border-radius:999px;padding:3px;flex:none;}
+.weekNav button{width:40px;height:36px;border:0;border-radius:999px;background:transparent;color:var(--tintText);display:grid;place-items:center;cursor:pointer;}
+.weekNav button:hover:not(:disabled){background:var(--bg2);}
+.weekNav button:disabled{color:var(--label3);cursor:default;}
+.secTitle{font-family:var(--fd);font-size:22px;line-height:28px;font-weight:700;margin:14px 4px 0;}
+.secTitle:first-of-type{margin-top:0;}
+.meal.empty{color:var(--label3);}
+.inlineLink{border:0;background:none;padding:0;color:var(--tintText);font:inherit;font-weight:600;cursor:pointer;text-decoration:underline;}
 
 .panel{display:grid;grid-template-columns:minmax(0,1fr);gap:12px;}
 .gh{font-size:13px;line-height:18px;color:var(--label2);padding:0 20px;margin:0;}

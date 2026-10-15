@@ -103,8 +103,8 @@ row id `"default"`:
 - `params` — the four model params above
 - `products` — per ingredient key: `{ url?: Ocado product link, staple?: bool }`
   (staple defaults from `LIKELY_STAPLE`; an explicit `false` overrides it)
-- `shop` — `{ week: "YYYY-MM-DD", ticked: [ingredient keys] }`, what's already
-  in the Ocado basket for the planned week; reset on Confirm week
+- `shop` — `{ [Monday "YYYY-MM-DD"]: [ingredient keys] }`, what's already in the
+  Ocado basket for each week (older single-week shape is migrated on load)
 - `cleared` — flag so a deliberately emptied dataset isn't re-seeded
 
 Meal tags are auto-guessed from the name by `autoTag` on add, and drive the
@@ -132,8 +132,13 @@ weeks of synthetic history.
   component.
 - **All styling lives in the `CSS` template string** at the bottom of
   `app/page.js`, scoped under `.dfc`. The look matches Marcus's FIRE app: Apple
-  HIG, system fonts (SF), grouped background with inset lists, large titles, one
-  floating glass tab bar (This week, Shop, History, Meals), light and dark mode.
+  HIG, system fonts (SF), grouped background with inset lists, large titles,
+  light and dark mode.
+- **One main screen: the week.** ‹ › steps through logged past weeks, confirmed
+  (planned) weeks and the forecast ("draft") week. Each shows that week's
+  Dinners and, for non-past weeks, its Shopping list, both derived from the same
+  seven meal ids, so they never disagree. Confirming keeps you on the same week.
+  Meals, Past weeks and Tune the forecast live behind the ••• menu.
   Use the existing CSS variables (`--bg`, `--bg2`, `--label`, `--label2`, `--sep`,
   `--tint`, `--moss`, `--salmon`, etc.). Don't introduce a CSS framework or web fonts.
 - **Absolute-ish imports** are not configured beyond `baseUrl: "."`; existing
