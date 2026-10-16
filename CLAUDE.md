@@ -139,8 +139,11 @@ weeks of synthetic history.
   Dinners and, for non-past weeks, its Shopping list, both derived from the same
   seven meal ids, so they never disagree. Confirming keeps you on the same week.
   Meals, Past weeks and Tune the forecast live behind the ••• menu.
-  Use the existing CSS variables (`--bg`, `--bg2`, `--label`, `--label2`, `--sep`,
-  `--tint`, `--moss`, `--salmon`, etc.). Don't introduce a CSS framework or web fonts.
+  Colours come from the shared **Slate & Ochre** system in `app/slate-ochre.css`
+  (`--ds-*` tokens, light and dark; the same file is used by the FIRE app). The
+  `.dfc` block maps this app's names (`--tint`, `--salmon`, `--sun`, `--moss`, …)
+  onto those tokens; change colours in the tokens file, never as literals in
+  components. Don't introduce a CSS framework or web fonts.
 - **Absolute-ish imports** are not configured beyond `baseUrl: "."`; existing
   code uses relative imports (`../lib/store`). Match that.
 - **British English** in user-facing copy (en-GB dates, "chilli", "lasagne").

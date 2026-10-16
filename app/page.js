@@ -1378,31 +1378,23 @@ function Toggle({ on, onClick, children }) {
 
 /* ================================== css ================================== */
 const CSS = `
-/* Apple HIG, matching the FIRE app: grouped backgrounds, inset lists, one floating glass tab bar.
-   Accents from Sanzo Wada's Dictionary of Color Combinations: Antwarp Blue, Ochraceous Salmon, Sulphine Yellow. */
+/* Apple HIG, matching the FIRE app. Colours come from the shared Slate & Ochre system
+   (app/slate-ochre.css, loaded in layout.js); these are this app's names for them. */
 .dfc{
-  --bg:#f2f2f7; --bg2:#ffffff; --bg3:#f2f2f7;
-  --label:#000; --label2:rgba(60,60,67,.6); --label3:rgba(60,60,67,.3);
-  --sep:rgba(60,60,67,.18); --fill:rgba(120,120,128,.16); --fill2:rgba(118,118,128,.12);
-  --tint:rgb(0,113,144); --tintText:rgb(0,105,134); --onTint:#fff;
-  --salmon:rgb(200,140,96); --sun:rgb(193,159,44); --moss:rgb(67,119,66); --green:rgb(52,199,89); --redText:rgb(233,21,45);
-  --glass:rgba(255,255,255,.62); --glassEdge:rgba(255,255,255,.75); --glassShadow:0 10px 36px rgba(0,0,0,.14),0 1px 3px rgba(0,0,0,.08);
-  --sel:rgba(0,0,0,.06);
+  --bg:var(--ds-bg); --bg2:var(--ds-bg2); --bg3:var(--ds-bg3);
+  --label:var(--ds-label); --label2:var(--ds-label2); --label3:var(--ds-label3);
+  --sep:var(--ds-sep); --fill:var(--ds-fill); --fill2:var(--ds-fill2);
+  --tint:var(--ds-accent); --tintText:var(--ds-accent-text); --onTint:var(--ds-on-accent);
+  --salmon:var(--ds-series-2); --sun:var(--ds-highlight); --moss:var(--ds-positive); --green:var(--ds-positive); --redText:var(--ds-negative);
+  --glass:var(--ds-glass); --glassEdge:var(--ds-glass-edge); --glassShadow:0 10px 36px rgba(0,0,0,.14),0 1px 3px rgba(0,0,0,.08);
+  --sel:var(--ds-sel);
   --f:-apple-system,BlinkMacSystemFont,"SF Pro Text","SF Pro",system-ui,"Segoe UI",Roboto,"Helvetica Neue",sans-serif;
   --fd:-apple-system,BlinkMacSystemFont,"SF Pro Display","SF Pro",system-ui,"Segoe UI",Roboto,"Helvetica Neue",sans-serif;
   --fr:ui-rounded,"SF Pro Rounded",-apple-system,BlinkMacSystemFont,system-ui,sans-serif;
   background:var(--bg); color:var(--label); font-family:var(--f); font-size:17px; line-height:22px; letter-spacing:-.01em;
   min-height:100vh; -webkit-font-smoothing:antialiased;
 }
-@media (prefers-color-scheme: dark){.dfc{
-  --bg:#000; --bg2:#1c1c1e; --bg3:#2c2c2e;
-  --label:#fff; --label2:rgba(235,235,245,.6); --label3:rgba(235,235,245,.3);
-  --sep:rgba(84,84,88,.6); --fill:rgba(120,120,128,.36); --fill2:rgba(118,118,128,.24);
-  --tint:rgb(120,205,208); --tintText:rgb(120,205,208); --onTint:#06262b;
-  --salmon:rgb(216,163,123); --sun:rgb(210,176,64); --moss:rgb(126,176,112); --green:rgb(48,209,88); --redText:rgb(255,97,101);
-  --glass:rgba(40,40,44,.6); --glassEdge:rgba(255,255,255,.14); --glassShadow:0 10px 36px rgba(0,0,0,.5); --sel:rgba(255,255,255,.1);
-  color-scheme:dark;
-}}
+@media (prefers-color-scheme: dark){.dfc{--glassShadow:0 10px 36px rgba(0,0,0,.5);color-scheme:dark;}}
 .dfc *{box-sizing:border-box;}
 .dfc button,.dfc input,.dfc select{font-family:inherit;}
 .dfc :focus-visible{outline:3px solid color-mix(in srgb,var(--tint) 60%,transparent);outline-offset:2px;border-radius:8px;}

@@ -1,0 +1,57 @@
+/* Slate & Ochre: Marcus's colour system, from Sanzo Wada's A Dictionary of Color Combinations.
+   Shared by FIRE, Dinner Forecast and future apps. Change colours here, not in app CSS.
+   Neutrals follow Apple's iOS system palette; accents are muted Wada colours.
+   Every text token meets WCAG AA (4.5:1) on both the page and card backgrounds, in both themes. */
+:root{
+  /* Wada swatches (reference only; use the semantic tokens below in components) */
+  --wada-slate:#4E5B6B;        /* Slate Color */
+  --wada-etain:#8DAAB4;        /* Etain Blue */
+  --wada-drab:#A3877A;         /* Light Brown Drab */
+  --wada-ochre:#A88B3F;        /* Olive Ocher */
+  --wada-viridian:#3D6B5A;     /* Dull Viridian Green */
+  --wada-porcelain:#93BDAE;    /* Light Porcelain Green */
+  --wada-pompeian:#9E4A44;     /* Pompeian Red */
+
+  /* Neutrals */
+  --ds-bg:#F2F2F7; --ds-bg2:#FFFFFF; --ds-bg3:#F2F2F7;
+  --ds-label:#000000; --ds-label2:rgba(60,60,67,.6); --ds-label3:rgba(60,60,67,.3);
+  --ds-sep:rgba(60,60,67,.18); --ds-fill:rgba(120,120,128,.16); --ds-fill2:rgba(118,118,128,.12);
+  --ds-glass:rgba(255,255,255,.62); --ds-glass-edge:rgba(255,255,255,.75); --ds-sel:rgba(0,0,0,.06);
+
+  /* Accent: buttons, links, selected states */
+  --ds-accent:#4E5B6B; --ds-accent-text:#4E5B6B; --ds-on-accent:#FFFFFF;
+  --ds-accent-soft:color-mix(in srgb,#4E5B6B 12%,transparent);
+
+  /* Highlight: one warm note per screen (a key number, a marker) */
+  --ds-highlight:#A88B3F; --ds-highlight-text:#7D6627;
+
+  /* Chart series, in order */
+  --ds-series-1:#4E5B6B; --ds-series-2:#A3877A; --ds-series-3:#A88B3F; --ds-series-4:#8DAAB4;
+
+  /* Status (never used as decoration) */
+  --ds-positive:#3D6B5A; --ds-caution:#A88B3F; --ds-caution-text:#7D6627; --ds-negative:#9E4A44;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --ds-bg:#000000; --ds-bg2:#1C1C1E; --ds-bg3:#2C2C2E;
+  --ds-label:#FFFFFF; --ds-label2:rgba(235,235,245,.6); --ds-label3:rgba(235,235,245,.3);
+  --ds-sep:rgba(84,84,88,.6); --ds-fill:rgba(120,120,128,.36); --ds-fill2:rgba(118,118,128,.24);
+  --ds-glass:rgba(40,40,44,.6); --ds-glass-edge:rgba(255,255,255,.14); --ds-sel:rgba(255,255,255,.1);
+  --ds-accent:#8DAAB4; --ds-accent-text:#A9C1C9; --ds-on-accent:#13202A;
+  --ds-accent-soft:color-mix(in srgb,#8DAAB4 18%,transparent);
+  --ds-highlight:#CDAE62; --ds-highlight-text:#D8BB72;
+  --ds-series-1:#8DAAB4; --ds-series-2:#C4A699; --ds-series-3:#CDAE62; --ds-series-4:#7C8A9B;
+  --ds-positive:#93BDAE; --ds-caution:#CDAE62; --ds-caution-text:#D8BB72; --ds-negative:#E39286;
+  color-scheme:dark;
+}}
+:root[data-theme="dark"]{
+  --ds-bg:#000000; --ds-bg2:#1C1C1E; --ds-bg3:#2C2C2E;
+  --ds-label:#FFFFFF; --ds-label2:rgba(235,235,245,.6); --ds-label3:rgba(235,235,245,.3);
+  --ds-sep:rgba(84,84,88,.6); --ds-fill:rgba(120,120,128,.36); --ds-fill2:rgba(118,118,128,.24);
+  --ds-glass:rgba(40,40,44,.6); --ds-glass-edge:rgba(255,255,255,.14); --ds-sel:rgba(255,255,255,.1);
+  --ds-accent:#8DAAB4; --ds-accent-text:#A9C1C9; --ds-on-accent:#13202A;
+  --ds-accent-soft:color-mix(in srgb,#8DAAB4 18%,transparent);
+  --ds-highlight:#CDAE62; --ds-highlight-text:#D8BB72;
+  --ds-series-1:#8DAAB4; --ds-series-2:#C4A699; --ds-series-3:#CDAE62; --ds-series-4:#7C8A9B;
+  --ds-positive:#93BDAE; --ds-caution:#CDAE62; --ds-caution-text:#D8BB72; --ds-negative:#E39286;
+  color-scheme:dark;
+}

@@ -1,3 +1,4 @@
+import "./slate-ochre.css";
 import "./globals.css";
 
 export const metadata = {
