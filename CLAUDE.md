@@ -149,6 +149,26 @@ weeks of synthetic history.
 - **British English** in user-facing copy (en-GB dates, "chilli", "lasagne").
 - Keep the app a single shared dataset — there is no per-user auth.
 
+## Meal prep (`/prep`)
+
+`app/prep/page.js` renders the same component with `initialTab="prep"`, so the
+whole app stays in `app/page.js`. A Sunday session preps the selected week's
+prep-friendly dinners:
+
+- Meals carry `prepFriendly`, `prepLevel` (`chop` | `part` | `full`) and
+  `prepTasks` (chop tasks with ingredient/qty/unit/cut; cook tasks with minutes,
+  `handsOff`, `equip`, `stage: base | finish`). Defaults come from `guessPrep`.
+  Steps are drafted by `/api/prep` (AI Gateway) with `draftPrepTasks` as the
+  deterministic fallback, saved on the meal and editable in Meals (`PrepEditor`).
+- `buildPrepPlan` merges identical ingredient + cut chopping across meals,
+  schedules longest hands-off cooks first on 1 slow cooker / 1 oven / 4 hob
+  rings (a meal whose appliance is taken is bagged to cook on the night), then
+  adds cool and pack steps. Nights already past are skipped.
+- Storage follows FSA advice: cooked food 2 days in the fridge, otherwise the
+  freezer; chopped raw veg 5 days; raw meat by its pack's use-by.
+- Session state lives in `prep[weekMonday]` (`picks`, `startedAt`, `ticked`,
+  `timers`, `done`), saved like everything else. Wake Lock keeps the screen on.
+
 ## Ocado
 
 Ocado has no public API. The Shop tab deep-links each ingredient to a linked

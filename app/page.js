@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useMemo, useCallback } from "react";
-import { Dices, Plus, Trash2, ChevronLeft, ChevronRight, Check, Sparkles, Lock, ShoppingBasket, MoreHorizontal, X } from "lucide-react";
+import { Dices, Plus, Trash2, ChevronLeft, ChevronRight, Check, Sparkles, Lock, ShoppingBasket, MoreHorizontal, X, Timer } from "lucide-react";
 
 /* Ocado has no public API: we deep-link into its search or a product page the household has linked. */
 const OCADO_SEARCH = (term) => `https://www.ocado.com/search?q=${encodeURIComponent(term)}`;
@@ -396,11 +396,195 @@ function seedData() {
   return { lib, weeks };
 }
 
+/* ------------------------------------------------------------------ *
+ *  MEAL PREP — one Sunday session for the week's prep-friendly meals.
+ *  Each meal carries prepTasks (Claude drafts them, you edit them):
+ *    { id, kind: "chop" | "cook", ingredient?, qty?, unit?, cut?, text,
+ *      minutes?, handsOff?, equip?: "slow cooker" | "oven" | "hob", stage?: "base" | "finish" }
+ *  A meal's prep level picks which of them run on Sunday:
+ *    chop = chopping only · part = chopping + the "base" cooking · full = everything.
+ * ------------------------------------------------------------------ */
+const PREP_LEVELS = [["chop", "Chop"], ["part", "Part"], ["full", "Full"]];
+/* Food Standards Agency: eat cooked leftovers within 2 days; freeze anything for later in the week */
+const COOKED_FRIDGE_DAYS = 2;
+const RAW_VEG_FRIDGE_DAYS = 5;
+const EQUIPMENT = { "slow cooker": 1, oven: 1, hob: 4 };
+const MEAT = /\b(beef|lamb|pork|chicken|sausage|mince|bacon|chorizo|steak)/;
+const NOT_CHOPPED = /\b(tins?|tinned|chopped tomatoes|passata|stock|paste|sauce|rice|pasta|spaghetti|pappardelle|noodles?|couscous|tortillas?|wraps?|bread|buns?|flatbreads?|pastry|sheets|cheese|cheddar|mozzarella|parmesan|feta|cream|crème fraîche|yogh?urt|milk|butter|oil|spices?|seasoning|salt|black pepper|herbs|beans?|chickpeas?|lentils?|coconut milk|peanuts?|apricots?|ras el hanout|gravy|flour|sugar|eggs?|hummus|olives|tzatziki|salsa|soured cream|béchamel|mince|sausages?|paprika|cumin|turmeric|cinnamon|oregano|thyme|bay|garam masala|curry powder)\b/;
+const CUTS = [[/onion|shallot|leek/, "diced"], [/pepper|courgette|mushroom|celery/, "sliced"], [/carrot|potato|squash|aubergine|swede|parsnip/, "diced"], [/garlic|ginger|chilli/, "crushed"], [MEAT, "diced"]];
+const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+
+function guessPrep(m) {
+  const n = (m.name || "").toLowerCase();
+  const has = (...ws) => ws.some((w) => n.includes(w));
+  const batch = has("slow cooker", "stew", "casserole", "curry", "massaman", "rendang", "chilli", "bolognese", "ragù", "ragu", "lasagne", "cottage", "shepherd", "pie", "enchilada", "goulash", "tagine", "dal", "dahl", "soup");
+  const light = has("traybake", "fajita", "stroganoff", "stir");
+  return { friendly: !m.isSkip && !m.isTreat && (batch || light), level: batch ? "full" : "chop" };
+}
+const prepOf = (m) => {
+  const g = guessPrep(m);
+  return { friendly: m.prepFriendly ?? g.friendly, level: m.prepLevel || g.level };
+};
+
+/* deterministic draft, used when Claude can't be reached */
+function draftPrepTasks(m) {
+  const n = (m.name || "").toLowerCase();
+  const slow = /slow cooker|stew|casserole|massaman|rendang|goulash|tagine/.test(n);
+  const assemble = /lasagne|pie|enchilada|bake|cottage|shepherd/.test(n);
+  const tasks = [];
+  (m.ingredients || []).forEach((ing, i) => {
+    const k = ing.trim().toLowerCase();
+    if (!k || NOT_CHOPPED.test(k)) return;
+    const cut = (CUTS.find(([re]) => re.test(k)) || [null, "chopped"])[1];
+    tasks.push({ id: "c" + i, kind: "chop", ingredient: k, cut, text: `${cap(k)}, ${cut}` });
+  });
+  const meat = (m.ingredients || []).some((x) => MEAT.test(x.toLowerCase()));
+  const base = meat ? "Brown the meat and soften the onions" : "Soften the onions and spices";
+  tasks.push({ id: "b1", kind: "cook", stage: "base", text: slow ? `${base}, then everything into the slow cooker` : `${base}, then add the sauce`, minutes: 20 });
+  tasks.push(slow
+    ? { id: "b2", kind: "cook", stage: "base", text: "Slow cook on low", minutes: 360, handsOff: true, equip: "slow cooker" }
+    : { id: "b2", kind: "cook", stage: "base", text: "Simmer", minutes: 30, handsOff: true, equip: "hob" });
+  if (assemble) tasks.push({ id: "f1", kind: "cook", stage: "finish", text: "Assemble in the dish, ready to bake on the night", minutes: 15 });
+  return tasks;
+}
+
+/* keep only well-formed tasks (Claude's output, or anything hand-edited) */
+function cleanPrepTasks(arr) {
+  if (!Array.isArray(arr)) return null;
+  const out = arr.slice(0, 24).map((t, i) => {
+    const kind = t && t.kind === "cook" ? "cook" : "chop";
+    const o = { id: String(t?.id || kind[0] + i), kind, text: String(t?.text || "").slice(0, 140) };
+    if (kind === "chop") {
+      if (t.ingredient) o.ingredient = String(t.ingredient).toLowerCase().slice(0, 40);
+      if (t.cut) o.cut = String(t.cut).toLowerCase().slice(0, 20);
+      if (Number(t.qty) > 0) o.qty = Number(t.qty);
+      if (t.unit) o.unit = String(t.unit).slice(0, 10);
+      if (!o.text) o.text = cap([o.ingredient, o.cut].filter(Boolean).join(", "));
+    } else {
+      o.minutes = Math.max(1, Math.min(720, Math.round(Number(t.minutes) || 10)));
+      if (t.handsOff) o.handsOff = true;
+      if (EQUIPMENT[t.equip]) o.equip = t.equip;
+      o.stage = t.stage === "finish" ? "finish" : "base";
+    }
+    return o;
+  }).filter((t) => t.text);
+  return out.length ? out : null;
+}
+
+async function aiPrepTasks(m, level) {
+  try {
+    const res = await fetch("/api/prep", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: m.name, ingredients: m.ingredients || [], level }),
+    });
+    const data = await res.json();
+    return cleanPrepTasks(data.tasks);
+  } catch {
+    return null;
+  }
+}
+
+const addDays = (d, n) => { const x = new Date(d); x.setHours(0, 0, 0, 0); x.setDate(x.getDate() + n); return x; };
+const dayDiff = (a, b) => Math.round((addDays(b, 0) - addDays(a, 0)) / 86400000);
+
+/* the Sunday plan: merged chopping, a running order that starts the longest hands-off
+   cooks first on the kitchen's equipment, then a labelled container per meal */
+function buildPrepPlan(picks, byId, monday, startMs) {
+  const meals = picks
+    .map((p) => ({ ...p, meal: byId[p.mealId] }))
+    .filter((p) => p.meal && dayDiff(new Date(startMs), addDays(monday, p.night)) >= 0) // nothing to prep for nights already gone
+    .map((p) => {
+      const all = p.meal.prepTasks?.length ? p.meal.prepTasks : draftPrepTasks(p.meal);
+      const tasks = all.filter((t) => t.kind === "chop" || (p.level === "part" && t.stage !== "finish") || p.level === "full");
+      return { ...p, tasks, handsOff: tasks.reduce((s, t) => s + (t.handsOff ? t.minutes || 0 : 0), 0) };
+    });
+  const chopKey = (t) => "c:" + ingKey(t.ingredient || t.text) + "|" + (t.cut || "");
+
+  const chops = new Map();
+  meals.forEach((p) => p.tasks.filter((t) => t.kind === "chop").forEach((t) => {
+    const key = chopKey(t);
+    if (!chops.has(key)) chops.set(key, { key, ingredient: t.ingredient || "", cut: t.cut || "", text: t.text, qty: {}, uses: [] });
+    const c = chops.get(key);
+    if (t.qty) c.qty[t.unit || ""] = (c.qty[t.unit || ""] || 0) + t.qty;
+    if (!c.uses.some((u) => u.night === p.night)) c.uses.push({ name: p.meal.name, night: p.night });
+  }));
+  chops.forEach((c) => {
+    const q = Object.entries(c.qty).map(([u, n]) => `${+n.toFixed(2)}${u ? (u.length > 2 ? " " : "") + u : ""}`).join(" + ");
+    c.label = q && c.ingredient ? `${q} ${c.ingredient}${c.cut ? ", " + c.cut : ""}` : c.text;
+  });
+
+  const steps = [];
+  const packs = [];
+  const free = Object.fromEntries(Object.entries(EQUIPMENT).map(([k, n]) => [k, Array(n).fill(0)]));
+  const done = new Set();
+  let t = 0; // minutes of hands-on work so far
+  const sessionDay = new Date(startMs);
+  [...meals].sort((a, b) => b.handsOff - a.handsOff || a.night - b.night).forEach((p) => {
+    p.tasks.filter((x) => x.kind === "chop").forEach((x) => {
+      const key = chopKey(x);
+      if (done.has(key)) return;
+      done.add(key);
+      const c = chops.get(key);
+      steps.push({ key, at: t, kind: "chop", text: c.label, uses: c.uses.length > 1 ? c.uses : null, meal: c.uses.length === 1 ? p.meal.name : null });
+      t += 2 + c.uses.length;
+    });
+    let ready = t;
+    let cooked = false;
+    let bagged = false;
+    for (const x of p.tasks.filter((y) => y.kind === "cook")) {
+      const key = `s:${p.night}:${p.mealId}:${x.id}`;
+      if (x.handsOff) {
+        const eq = free[x.equip] ? x.equip : "hob";
+        const slots = free[eq];
+        const i = slots.indexOf(Math.min(...slots));
+        const start = Math.max(ready, slots[i]);
+        if (eq !== "hob" && start - ready > 30) { bagged = true; break; } // the slow cooker or oven is taken: cook it on the night
+        slots[i] = start + x.minutes;
+        steps.push({ key, at: start, kind: "cook", text: x.text, meal: p.meal.name, timer: x.minutes, equip: eq });
+        ready = start + x.minutes;
+      } else if (ready > t) {
+        steps.push({ key, at: ready, kind: "cook", text: x.text, meal: p.meal.name, minutes: x.minutes });
+        ready += x.minutes;
+      } else {
+        steps.push({ key, at: t, kind: "cook", text: x.text, meal: p.meal.name, minutes: x.minutes });
+        t += x.minutes;
+        ready = t;
+      }
+      cooked = true;
+    }
+    const nightDate = addDays(monday, p.night);
+    const daysAway = dayDiff(sessionDay, nightDate);
+    const hasMeat = p.tasks.some((x) => x.kind === "chop" && MEAT.test(x.ingredient || x.text));
+    let store, at;
+    if (cooked && !bagged) {
+      steps.push({ key: `cool:${p.night}:${p.mealId}`, at: ready, kind: "cook", text: `Cool ${p.meal.name}, lid on within the hour`, meal: p.meal.name, minutes: 30 });
+      at = ready + 30;
+      store = daysAway <= COOKED_FRIDGE_DAYS
+        ? { where: "Fridge", note: `use by ${fmtDM(addDays(sessionDay, COOKED_FRIDGE_DAYS))}` }
+        : { where: "Freezer", note: "defrost in the fridge the night before" };
+    } else {
+      at = t;
+      const vegOk = daysAway <= RAW_VEG_FRIDGE_DAYS;
+      store = {
+        where: vegOk ? "Fridge" : "Freezer",
+        note: (vegOk ? `chopped veg, use by ${fmtDM(addDays(sessionDay, RAW_VEG_FRIDGE_DAYS))}` : "chopped veg, straight from frozen")
+          + (hasMeat ? ". Raw meat in its own tub, by the pack's use-by date" : "")
+          + (bagged ? ". Slow cook it on the night" : ""),
+      };
+    }
+    packs.push({ key: `p:${p.night}:${p.mealId}`, at, name: p.meal.name, night: p.night, date: nightDate, ...store });
+  });
+  steps.sort((a, b) => a.at - b.at);
+  const end = Math.max(t, ...steps.map((s) => s.at + (s.timer || s.minutes || 0)), ...packs.map((p) => p.at + 5));
+  return { steps, packs, handsOn: t, end };
+}
+
 /* persistence lives in ../lib/store.js (Supabase-backed, single shared row) */
 
 /* =============================== component =============================== */
-export default function DinnerForecast() {
-  const [tab, setTab] = useState("week"); // week | library | history | tune
+export default function DinnerForecast({ initialTab = "week" } = {}) {
+  const [tab, setTab] = useState(initialTab); // week | prep | library | history | tune
   const [sel, setSel] = useState(null); // selected week key (YYYY-MM-DD Monday)
   const [menuOpen, setMenuOpen] = useState(false);
   const [library, setLibrary] = useState([]);
@@ -425,6 +609,9 @@ export default function DinnerForecast() {
   const [shop, setShop] = useState({}); // week key -> ingredient keys already in the Ocado basket
   const [linking, setLinking] = useState(null); // ingredient key being linked to an Ocado product
   const [linkDraft, setLinkDraft] = useState("");
+  const [prep, setPrep] = useState({}); // week key -> { picks: {night: level}, startedAt, ticked: [keys], timers: {key: endsAt}, done }
+  const [starting, setStarting] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
 
   const today = useMemo(() => new Date(), []);
   const thisMonday = useMemo(() => mondayOfWeek(today, 0), [today]);
@@ -464,6 +651,7 @@ export default function DinnerForecast() {
         if (st.products && typeof st.products === "object") setProducts(st.products);
         if (st.shop && Array.isArray(st.shop.ticked)) setShop(st.shop.week ? { [isoLocal(normMonday(st.shop.week))]: st.shop.ticked } : {});
         else if (st.shop && typeof st.shop === "object") setShop(st.shop);
+        if (st.prep && typeof st.prep === "object") setPrep(st.prep);
       } else if (!(st && st.cleared)) {
         const { lib: el, weeks: ew } = seedData();
         setLibrary(el);
@@ -480,11 +668,11 @@ export default function DinnerForecast() {
     if (!loaded) return;
     setSaveStatus("saving");
     const t = setTimeout(async () => {
-      const ok = await saveState({ library, weeks, params, plannedWeeks, products, shop, cleared: library.length === 0 });
+      const ok = await saveState({ library, weeks, params, plannedWeeks, products, shop, prep, cleared: library.length === 0 });
       setSaveStatus(ok ? "saved" : "error");
     }, 600);
     return () => clearTimeout(t);
-  }, [library, weeks, params, plannedWeeks, products, shop, loaded]);
+  }, [library, weeks, params, plannedWeeks, products, shop, prep, loaded]);
 
   // meals pinned by the user — passed to the engine so anti-repetition stays correct
   const fixedMeals = useMemo(() => {
@@ -693,6 +881,100 @@ export default function DinnerForecast() {
   };
   const unplanWeek = (idx) => { removePlannedWeek(idx); setOpenDay(null); };
 
+  /* ---- meal prep: one session per week, for the nights ticked ---- */
+  const prepSession = prep[sw.key];
+  const defaultPicks = useMemo(() => {
+    const o = {};
+    swMeals.forEach((id, i) => {
+      const m = byId[id];
+      if (m && !m.isSkip && prepOf(m).friendly && addDays(sw.monday, i) >= addDays(new Date(), 0)) o[i] = prepOf(m).level;
+    });
+    return o;
+  }, [swMeals, byId, sw]);
+  const picks = prepSession?.picks || defaultPicks;
+  const pickList = useMemo(
+    () => Object.entries(picks)
+      .map(([n, level]) => ({ night: +n, mealId: swMeals[+n], level }))
+      .filter((x) => x.mealId && byId[x.mealId] && addDays(sw.monday, x.night) >= addDays(new Date(), 0)),
+    [picks, swMeals, byId, sw]
+  );
+  const prepStart = prepSession?.startedAt;
+  const prepPlan = useMemo(() => buildPrepPlan(pickList, byId, sw.monday, prepStart || Date.now()), [pickList, byId, sw, prepStart]);
+  const prepRunning = tab === "prep" && !!prepStart && !prepSession?.done;
+
+  /* /prep is its own address; it opens on the week the coming Sunday preps for */
+  const openPrep = useCallback(() => {
+    const d = new Date();
+    const dow = (d.getDay() + 6) % 7;
+    setSel(isoLocal(mondayOfWeek(d, dow >= 4 ? 1 : 0)));
+    setTab("prep");
+    setMenuOpen(false);
+    window.scrollTo(0, 0);
+  }, []);
+  useEffect(() => {
+    if (loaded && initialTab === "prep") openPrep();
+  }, [loaded, initialTab, openPrep]);
+  useEffect(() => {
+    if (!loaded) return;
+    const want = tab === "prep" ? "/prep" : "/";
+    if (window.location.pathname !== want) window.history.replaceState(null, "", want);
+  }, [tab, loaded]);
+
+  /* keep the screen awake while prepping, and tick the timers */
+  useEffect(() => {
+    if (!prepRunning || typeof navigator === "undefined" || !("wakeLock" in navigator)) return;
+    let lock = null;
+    let gone = false;
+    const get = async () => { try { lock = await navigator.wakeLock.request("screen"); } catch {} };
+    const onVis = () => { if (document.visibilityState === "visible" && !gone) get(); };
+    get();
+    document.addEventListener("visibilitychange", onVis);
+    return () => { gone = true; document.removeEventListener("visibilitychange", onVis); lock?.release?.().catch(() => {}); };
+  }, [prepRunning]);
+  useEffect(() => {
+    if (!prepRunning) return;
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [prepRunning]);
+  const buzzed = React.useRef(new Set());
+  useEffect(() => {
+    Object.entries(prepSession?.timers || {}).forEach(([k, end]) => {
+      if (end <= now && now - end < 60000 && !buzzed.current.has(k)) {
+        buzzed.current.add(k);
+        try { navigator.vibrate?.([300, 150, 300]); } catch {}
+      }
+    });
+  }, [now, prepSession]);
+
+  const setSession = (patch) => setPrep((P) => ({ ...P, [sw.key]: { ...(P[sw.key] || {}), ...patch } }));
+  const togglePick = (i, m) => {
+    const n = { ...picks };
+    if (n[i] !== undefined) delete n[i]; else n[i] = prepOf(m).level;
+    setSession({ picks: n });
+  };
+  const setPickLevel = (i, level) => setSession({ picks: { ...picks, [i]: level } });
+  const startPrep = async () => {
+    const key = sw.key;
+    setStarting(true);
+    const need = [...new Map(pickList.map((x) => [x.mealId, byId[x.mealId]])).values()].filter((m) => !m.prepTasks?.length);
+    const drafted = Object.fromEntries(await Promise.all(need.map(async (m) => [m.id, (await aiPrepTasks(m)) || draftPrepTasks(m)])));
+    if (need.length) setLibrary((L) => L.map((m) => (drafted[m.id] ? { ...m, prepTasks: drafted[m.id] } : m)));
+    setPrep((P) => ({ ...P, [key]: { picks, startedAt: Date.now(), ticked: [], timers: {}, done: false } }));
+    setNow(Date.now());
+    setStarting(false);
+    window.scrollTo(0, 0);
+  };
+  const tickStep = (step) =>
+    setPrep((P) => {
+      const cur = P[sw.key] || {};
+      const t = new Set(cur.ticked || []);
+      const timers = { ...(cur.timers || {}) };
+      if (t.has(step.key)) { t.delete(step.key); delete timers[step.key]; }
+      else { t.add(step.key); if (step.timer) timers[step.key] = Date.now() + step.timer * 60000; }
+      return { ...P, [sw.key]: { ...cur, ticked: [...t], timers } };
+    });
+  const resetPrep = () => setPrep((P) => { const n = { ...P }; delete n[sw.key]; return n; });
+
   if (!loaded) return <div className="loading">Loading the almanac…</div>;
 
   const hasData = library.length > 0;
@@ -732,7 +1014,7 @@ export default function DinnerForecast() {
       <style>{CSS}</style>
 
       <div className="topbar">
-        {tab !== "week" ? (
+        {tab !== "week" && tab !== "prep" ? (
           <button className="backBtn" onClick={() => openPage("week")}>
             <ChevronLeft size={20} /> {weekName(sw.monday, thisMonday)}
           </button>
@@ -743,6 +1025,8 @@ export default function DinnerForecast() {
             <button className="stepBtn" aria-label="Next week" disabled={swPos >= weekList.length - 1} onClick={() => go(swPos + 1)}><ChevronRight size={22} /></button>
             {saveStatus === "error" ? (
               <span className="status error">Not saved</span>
+            ) : tab === "prep" ? (
+              <span className="status planned">Prep</span>
             ) : (
               sw.kind !== "past" && <span className={`status ${sw.kind}`}>{STATUS[sw.kind]}</span>
             )}
@@ -754,6 +1038,11 @@ export default function DinnerForecast() {
           </button>
           {menuOpen && (
             <div className="menu" role="menu">
+              {tab === "prep" ? (
+                <button role="menuitem" onClick={() => openPage("week")}>Dinners</button>
+              ) : (
+                <button role="menuitem" onClick={openPrep}>Meal prep</button>
+              )}
               <button role="menuitem" onClick={() => openPage("library")}>Meals</button>
               <button role="menuitem" onClick={() => openPage("history")}>Past weeks</button>
               <button role="menuitem" onClick={() => openPage("tune")}>Tune the forecast</button>
@@ -799,6 +1088,7 @@ export default function DinnerForecast() {
                         <span className="lab">
                           <span className={meal ? "meal" : "meal empty"}>{meal ? meal.name : "Nothing planned"}</span>
                         </span>
+                        {prepSession?.done && prepSession.picks?.[i] !== undefined && <span className="chip prepped">Prepped</span>}
                         {sw.kind === "draft" && lockedDays[i] && <Lock size={14} className="lockIc" aria-label="Kept" />}
                         <ChevronRight size={16} className="chev" />
                       </button>
@@ -853,6 +1143,11 @@ export default function DinnerForecast() {
                 <div className="actions">
                   <button className="textBtn" onClick={() => unplanWeek(sw.idx)}>Go back to the forecast for this week</button>
                 </div>
+              )}
+              {sw.kind !== "past" && pickList.length > 0 && (
+                <button className="btn wide prepLink" onClick={() => { setTab("prep"); window.scrollTo(0, 0); }}>
+                  <Timer size={17} /> {prepSession?.done ? "Prep done" : prepStart ? "Carry on prepping" : `Meal prep: ${pickList.length} ${pickList.length === 1 ? "dinner" : "dinners"}`}
+                </button>
               )}
 
               {sw.kind !== "past" && (
@@ -966,7 +1261,15 @@ export default function DinnerForecast() {
         </>
       )}
 
-      {tab !== "week" && (
+      {tab === "prep" && (
+        <PrepView
+          {...{ hasData, swMeals, byId, picks, pickList, plan: prepPlan, session: prepSession, now, starting, monday: sw.monday }}
+          onPick={togglePick} onLevel={setPickLevel} onStart={startPrep} onTick={tickStep}
+          onFinish={() => setSession({ done: true })} onReset={resetPrep} onMeals={() => openPage("library")}
+        />
+      )}
+
+      {tab !== "week" && tab !== "prep" && (
         <header className="head">
           <h1 className="largeTitle">{PAGE[tab]}</h1>
         </header>
@@ -1233,6 +1536,7 @@ export default function DinnerForecast() {
                       onSuggest={() => suggestIngredients(m)}
                       suggesting={suggesting === m.id}
                     />
+                    <PrepEditor meal={m} onChange={(patch) => updateMeal(m.id, patch)} />
                   </div>
                 )}
               </li>
@@ -1359,6 +1663,222 @@ function IngredientEditor({ value, onChange, onSuggest, suggesting }) {
         />
         <button type="button" className="btn small" disabled={!draft.trim()} onClick={() => add(draft)}>Add</button>
       </div>
+    </div>
+  );
+}
+
+const fmtDur = (min) => (min >= 60 ? `${Math.floor(min / 60)} h${min % 60 ? ` ${Math.round(min % 60)} min` : ""}` : `${Math.max(1, Math.round(min))} min`);
+const fmtLeft = (ms) => {
+  const s = Math.max(0, Math.round(ms / 1000));
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = s % 60;
+  return h ? `${h}:${String(m).padStart(2, "0")}:${String(x).padStart(2, "0")}` : `${m}:${String(x).padStart(2, "0")}`;
+};
+
+function Seg({ value, onChange, label }) {
+  return (
+    <span className="seg" role="radiogroup" aria-label={label}>
+      {PREP_LEVELS.map(([v, l]) => (
+        <button key={v} type="button" role="radio" aria-checked={value === v} className={value === v ? "on" : ""} onClick={() => onChange(v)}>
+          {l}
+        </button>
+      ))}
+    </span>
+  );
+}
+
+/* the /prep screen: pick the nights, then work through one checklist */
+function PrepView({ hasData, monday, swMeals, byId, picks, pickList, plan, session, now, starting, onPick, onLevel, onStart, onTick, onFinish, onReset, onMeals }) {
+  if (!hasData) return <p className="gf">Add some dinners under Meals first.</p>;
+
+  if (!session?.startedAt) {
+    const today = addDays(new Date(), 0);
+    const nights = swMeals.map((id, i) => [i, byId[id]]).filter(([i, m]) => m && !m.isSkip && addDays(monday, i) >= today);
+    return (
+      <section className="panel">
+        <h2 className="secTitle">Meal prep</h2>
+        <p className="gf">Tick what to prep in one go. Chop does the knife work, Part also cooks the base, Full cooks it to the end for the fridge or freezer.</p>
+        {nights.length === 0 ? (
+          <p className="gf">No dinners left to prep this week. Step on to next week with ›.</p>
+        ) : (
+          <ul className="list">
+            {nights.map(([i, m]) => {
+              const on = picks[i] !== undefined;
+              return (
+                <li key={i}>
+                  <div className="li prepPick">
+                    <button className="tick" aria-pressed={on} aria-label={`Prep ${m.name}`} onClick={() => onPick(i, m)}>
+                      <Check size={14} />
+                    </button>
+                    <span className="lab">
+                      <span className="meal">{m.name}</span>
+                      <span className="sub">{DAY_FULL[i]}</span>
+                    </span>
+                    {on && <Seg label={`How far to prep ${m.name}`} value={picks[i]} onChange={(v) => onLevel(i, v)} />}
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+        {pickList.length > 0 && (
+          <>
+            <p className="gf">
+              About {fmtDur(plan.handsOn)} at the board, all packed away in about {fmtDur(plan.end)}.
+              {pickList.some((p) => !byId[p.mealId]?.prepTasks?.length) && " Claude drafts the steps for any dinner that hasn't got them yet; edit them any time under Meals."}
+            </p>
+            <button className="btn primary wide" disabled={starting} onClick={onStart}>
+              {starting ? "Drafting the prep steps…" : "Start prep"}
+            </button>
+          </>
+        )}
+      </section>
+    );
+  }
+
+  const ticked = new Set(session.ticked || []);
+  const all = [...plan.steps, ...plan.packs];
+  const doneCount = all.filter((x) => ticked.has(x.key)).length;
+  const current = plan.steps.find((x) => !ticked.has(x.key))?.key;
+  const clock = (at) => new Date(session.startedAt + at * 60000).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+  const timers = Object.entries(session.timers || {})
+    .map(([key, end]) => ({ key, end, step: plan.steps.find((x) => x.key === key) }))
+    .filter((x) => x.step && now - x.end < 15 * 60000)
+    .sort((a, b) => a.end - b.end);
+
+  return (
+    <section className="panel">
+      {timers.length > 0 && (
+        <div className="timers" role="status">
+          {timers.map((x) => (
+            <span key={x.key} className={x.end <= now ? "timerPill done" : "timerPill"}>
+              <Timer size={14} /> {x.step.meal || x.step.text} {x.end <= now ? "is done" : fmtLeft(x.end - now)}
+            </span>
+          ))}
+        </div>
+      )}
+      <div className="meterRow">
+        <span>{doneCount} of {all.length} done</span>
+        <div className="meter" aria-hidden="true"><i style={{ width: `${(doneCount / Math.max(1, all.length)) * 100}%` }} /></div>
+      </div>
+
+      <h2 className="secTitle">Running order</h2>
+      <ul className="list prepList">
+        {plan.steps.map((st) => {
+          const on = ticked.has(st.key);
+          return (
+            <li key={st.key} className={`${on ? "got" : ""}${st.key === current ? " cur" : ""}`}>
+              <button className="li prepStep" aria-pressed={on} onClick={() => onTick(st)}>
+                <span className="bigTick" aria-hidden="true"><Check size={18} /></span>
+                <span className="lab">
+                  <span className="meal">{st.text}</span>
+                  <span className="sub">
+                    {clock(st.at)}
+                    {st.meal ? ` · ${st.meal}` : ""}
+                    {st.timer ? ` · ${fmtDur(st.timer)}, tap when it's on to start a timer` : st.minutes ? ` · ${fmtDur(st.minutes)}` : ""}
+                  </span>
+                  {st.uses && (
+                    <span className="chips">
+                      {st.uses.map((u) => <span key={u.night} className="chip">{u.name} · {DAY_FULL[u.night].slice(0, 3)}</span>)}
+                    </span>
+                  )}
+                </span>
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+
+      <h2 className="secTitle">Pack and label</h2>
+      <ul className="list prepList">
+        {plan.packs.map((pk) => {
+          const on = ticked.has(pk.key);
+          return (
+            <li key={pk.key} className={on ? "got" : ""}>
+              <button className="li prepStep" aria-pressed={on} onClick={() => onTick(pk)}>
+                <span className="bigTick" aria-hidden="true"><Check size={18} /></span>
+                <span className="lab">
+                  <span className="meal">{pk.name} <span className={pk.where === "Freezer" ? "chip freezer" : "chip"}>{pk.where}</span></span>
+                  <span className="sub">For {DAY_FULL[pk.night]} {fmtDM(pk.date)}. {cap(pk.note)}.</span>
+                </span>
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+
+      {session.done ? (
+        <div className="banner">Prep done. The week&rsquo;s dinners are marked as prepped.</div>
+      ) : (
+        <button className="btn primary wide" onClick={onFinish}><Check size={17} /> Finish prep</button>
+      )}
+      <div className="actions">
+        <button className="textBtn" onClick={onReset}>Start again</button>
+        <button className="textBtn" onClick={onMeals}>Edit prep steps</button>
+      </div>
+      <p className="gf">Cooked food keeps 2 days in the fridge (Food Standards Agency), so anything for later in the week goes in the freezer.</p>
+    </section>
+  );
+}
+
+/* per-meal prep settings and steps, in Meals */
+function PrepEditor({ meal, onChange }) {
+  const [busy, setBusy] = useState(false);
+  const p = prepOf(meal);
+  const tasks = meal.prepTasks || [];
+  const setTask = (i, patch) => onChange({ prepTasks: tasks.map((t, j) => (j === i ? { ...t, ...patch } : t)) });
+  const draft = async () => {
+    if (tasks.length && !window.confirm("Replace these prep steps with a new draft?")) return;
+    setBusy(true);
+    const t = (await aiPrepTasks(meal)) || draftPrepTasks(meal);
+    onChange({ prepTasks: t });
+    setBusy(false);
+  };
+  return (
+    <div className="prepEdit">
+      <div className="prepEditHead">
+        <Toggle on={p.friendly} onClick={() => onChange({ prepFriendly: !p.friendly })}>batch prep</Toggle>
+        {p.friendly && <Seg label="Default prep" value={p.level} onChange={(v) => onChange({ prepLevel: v })} />}
+      </div>
+      {p.friendly && (
+        <>
+          {tasks.length > 0 && (
+            <ol className="taskList">
+              {tasks.map((t, i) => (
+                <li key={t.id + i} className="taskRow">
+                  <select value={t.kind === "cook" ? (t.stage === "finish" ? "finish" : "cook") : "chop"} aria-label="Step type"
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setTask(i, v === "chop" ? { kind: "chop" } : { kind: "cook", stage: v === "finish" ? "finish" : "base", minutes: t.minutes || 10 });
+                    }}>
+                    <option value="chop">Chop</option>
+                    <option value="cook">Cook ahead</option>
+                    <option value="finish">On the night</option>
+                  </select>
+                  <input value={t.text} aria-label="Step" onChange={(e) => setTask(i, { text: e.target.value })} />
+                  {t.kind === "cook" && (
+                    <>
+                      <input className="mins" type="number" min="1" value={t.minutes || ""} aria-label="Minutes" onChange={(e) => setTask(i, { minutes: Math.max(1, +e.target.value || 1) })} />
+                      <label className="handsOff" title="Unattended: slow cooker, oven or simmering">
+                        <input type="checkbox" checked={!!t.handsOff} onChange={(e) => setTask(i, { handsOff: e.target.checked, equip: e.target.checked ? t.equip || "hob" : undefined })} /> timer
+                      </label>
+                      {t.handsOff && (
+                        <select value={t.equip || "hob"} aria-label="Equipment" onChange={(e) => setTask(i, { equip: e.target.value })}>
+                          {Object.keys(EQUIPMENT).map((k) => <option key={k} value={k}>{k}</option>)}
+                        </select>
+                      )}
+                    </>
+                  )}
+                  <button className="icon-btn" aria-label="Remove step" onClick={() => onChange({ prepTasks: tasks.filter((_, j) => j !== i) })}><X size={14} /></button>
+                </li>
+              ))}
+            </ol>
+          )}
+          <div className="actions">
+            <button className="btn small" onClick={draft} disabled={busy}><Sparkles size={14} /> {busy ? "Drafting…" : tasks.length ? "Redraft steps" : "Draft prep steps"}</button>
+            <button className="btn small ghost" onClick={() => onChange({ prepTasks: [...tasks, { id: "t" + Date.now(), kind: "cook", stage: "base", text: "", minutes: 10 }] })}><Plus size={14} /> Step</button>
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -1569,4 +2089,35 @@ details.group[open] > summary .chev{transform:rotate(90deg);}
 .switch input:checked + span{background:var(--green);}
 .switch input:checked + span::after{transform:translateX(20px);}
 @media (prefers-reduced-motion:reduce){.dfc *{transition:none !important;}}
+
+/* Meal prep */
+.prepLink{margin-top:4px;}
+.chip.prepped{background:var(--ds-accent-soft);color:var(--ds-accent-text);flex:none;}
+.chip.freezer{background:var(--ds-accent-soft);color:var(--ds-accent-text);}
+.prepPick{flex-wrap:wrap;}
+.seg{flex:none;display:inline-flex;gap:2px;background:var(--fill2);border-radius:999px;padding:2px;}
+.seg button{border:0;background:transparent;color:var(--label2);font-size:13px;font-weight:600;padding:5px 10px;border-radius:999px;cursor:pointer;}
+.seg button.on{background:var(--bg2);color:var(--label);box-shadow:0 1px 3px rgba(0,0,0,.12);}
+.prepList .li{min-height:64px;padding:12px 16px 12px 16px;align-items:flex-start;}
+.prepList .meal{font-size:19px;line-height:25px;}
+.prepList .sub{white-space:normal;}
+.prepList .chips{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px;}
+.bigTick{flex:none;width:34px;height:34px;margin-top:-2px;border-radius:999px;border:2px solid var(--label3);display:grid;place-items:center;color:transparent;transition:background .18s,border-color .18s;}
+.prepStep[aria-pressed="true"] .bigTick{background:var(--moss);border-color:var(--moss);color:#fff;}
+.prepList li.got .meal{color:var(--label2);text-decoration:line-through;text-decoration-color:var(--label3);}
+.prepList li.cur{background:color-mix(in srgb,var(--ds-highlight) 10%,var(--bg2));}
+.prepList li.cur .bigTick{border-color:var(--ds-highlight);}
+.timers{position:sticky;top:calc(env(safe-area-inset-top,0px) + 58px);z-index:5;display:flex;flex-wrap:wrap;gap:6px;}
+.timerPill{display:inline-flex;align-items:center;gap:6px;padding:8px 12px;border-radius:999px;background:var(--glass);-webkit-backdrop-filter:blur(18px);backdrop-filter:blur(18px);box-shadow:var(--glassShadow);font-size:15px;font-weight:600;font-variant-numeric:tabular-nums;color:var(--label);}
+.timerPill.done{background:var(--ds-highlight);color:#fff;animation:pulse 1s ease-in-out infinite alternate;}
+@keyframes pulse{to{opacity:.6;}}
+@media (prefers-reduced-motion: reduce){.timerPill.done{animation:none;}}
+.prepEdit{grid-column:1/-1;display:grid;gap:10px;border-top:1px solid var(--sep);padding-top:12px;}
+.prepEditHead{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+.taskList{list-style:none;margin:0;padding:0;display:grid;gap:6px;}
+.taskRow{display:flex;flex-wrap:wrap;align-items:center;gap:6px;}
+.taskRow input:not([type=checkbox]),.taskRow select{font-size:15px;padding:7px 10px;border-radius:10px;border:0;background:var(--fill2);color:var(--label);}
+.taskRow input:not([type=checkbox]):not(.mins){flex:1;min-width:160px;}
+.taskRow .mins{width:68px;}
+.handsOff{display:inline-flex;align-items:center;gap:4px;font-size:13px;color:var(--label2);}
 `;
