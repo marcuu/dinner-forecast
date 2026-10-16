@@ -724,8 +724,8 @@ export default function DinnerForecast() {
   };
   const go = (pos) => { const w = weekList[pos]; if (w) { setSel(w.key); setOpenDay(null); setLinking(null); } };
   const openPage = (t) => { setTab(t); setMenuOpen(false); window.scrollTo(0, 0); };
-  const STATUS = { past: "What you ate", planned: "Confirmed", draft: "Forecast. Swap anything, then confirm" };
-  const range = `${fmt(swDates[0])} to ${fmt(swDates[6])}`;
+  const STATUS = { past: "Eaten", planned: "Confirmed", draft: "Forecast" };
+  const range = `${fmtDM(swDates[0])} – ${fmtDM(swDates[6])}`;
   const PAGE = { library: "Meals", history: "Past weeks", tune: "Tune the forecast" };
 
   return (
@@ -759,11 +759,12 @@ export default function DinnerForecast() {
         <>
           <header className="weekHead">
             <div className="weekTitle">
-              <h1 className="largeTitle">{weekName(sw.monday, thisMonday)}</h1>
-              <p className="footnote">
-                {range}. {STATUS[sw.kind]}
-                {saveStatus === "error" && <span className="save-status error">. Couldn&rsquo;t save</span>}
+              <p className="eyebrow">
+                <span className={`status ${sw.kind}`}>{STATUS[sw.kind]}</span>
+                <span>{range}</span>
+                {saveStatus === "error" && <span className="status error">Couldn&rsquo;t save</span>}
               </p>
+              <h1 className="largeTitle">{weekName(sw.monday, thisMonday)}</h1>
             </div>
             <div className="weekNav" role="group" aria-label="Choose week">
               <button aria-label="Previous week" disabled={swPos <= 0} onClick={() => go(swPos - 1)}><ChevronLeft size={20} /></button>
@@ -1418,10 +1419,16 @@ const CSS = `
 .menu button:hover{background:var(--fill2);}
 
 /* Week header: big title, with the week stepper beside it */
-.weekHead{display:flex;justify-content:space-between;align-items:flex-end;gap:12px;padding:0 4px 18px;}
-.weekTitle{display:grid;gap:2px;min-width:0;}
-.weekTitle .footnote{font-size:15px;line-height:20px;}
-.weekNav{display:flex;gap:2px;background:var(--fill2);border-radius:999px;padding:3px;flex:none;}
+.weekHead{display:flex;justify-content:space-between;align-items:flex-end;gap:12px;padding:4px 4px 20px;}
+.weekTitle{display:grid;gap:6px;min-width:0;}
+.eyebrow{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin:0;font-size:13px;line-height:18px;font-weight:600;color:var(--label2);font-variant-numeric:tabular-nums;}
+.status{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 9px;border-radius:999px;font-size:12px;font-weight:600;letter-spacing:.02em;text-transform:uppercase;}
+.status.draft{background:color-mix(in srgb,var(--ds-highlight) 16%,transparent);color:var(--ds-highlight-text);}
+.status.draft::before{content:"";width:6px;height:6px;border-radius:999px;background:var(--ds-highlight);}
+.status.planned{background:var(--ds-accent-soft);color:var(--ds-accent-text);}
+.status.past{background:var(--fill2);color:var(--label2);}
+.status.error{background:color-mix(in srgb,var(--ds-negative) 14%,transparent);color:var(--ds-negative);text-transform:none;letter-spacing:0;}
+.weekNav{display:flex;gap:2px;background:var(--fill2);border-radius:999px;padding:3px;flex:none;margin-bottom:2px;}
 .weekNav button{width:40px;height:36px;border:0;border-radius:999px;background:transparent;color:var(--tintText);display:grid;place-items:center;cursor:pointer;}
 .weekNav button:hover:not(:disabled){background:var(--bg2);}
 .weekNav button:disabled{color:var(--label3);cursor:default;}
