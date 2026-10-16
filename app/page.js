@@ -725,7 +725,6 @@ export default function DinnerForecast() {
   const go = (pos) => { const w = weekList[pos]; if (w) { setSel(w.key); setOpenDay(null); setLinking(null); } };
   const openPage = (t) => { setTab(t); setMenuOpen(false); window.scrollTo(0, 0); };
   const STATUS = { past: "Eaten", planned: "Confirmed", draft: "Forecast" };
-  const range = `${fmtDM(swDates[0])} – ${fmtDM(swDates[6])}`;
   const PAGE = { library: "Meals", history: "Past weeks", tune: "Tune the forecast" };
 
   return (
@@ -738,7 +737,16 @@ export default function DinnerForecast() {
             <ChevronLeft size={20} /> {weekName(sw.monday, thisMonday)}
           </button>
         ) : (
-          <span />
+          <div className="weekBar" role="group" aria-label="Choose week">
+            <button className="stepBtn" aria-label="Previous week" disabled={swPos <= 0} onClick={() => go(swPos - 1)}><ChevronLeft size={22} /></button>
+            <h1 className="weekTitle">{weekName(sw.monday, thisMonday)}</h1>
+            <button className="stepBtn" aria-label="Next week" disabled={swPos >= weekList.length - 1} onClick={() => go(swPos + 1)}><ChevronRight size={22} /></button>
+            {saveStatus === "error" ? (
+              <span className="status error">Not saved</span>
+            ) : (
+              sw.kind !== "past" && <span className={`status ${sw.kind}`}>{STATUS[sw.kind]}</span>
+            )}
+          </div>
         )}
         <div className="menuWrap">
           <button className="menuBtn" aria-label="More" aria-expanded={menuOpen} onClick={() => setMenuOpen((o) => !o)}>
@@ -757,20 +765,6 @@ export default function DinnerForecast() {
       <div className="wrap" onClick={() => menuOpen && setMenuOpen(false)}>
       {tab === "week" && (
         <>
-          <header className="weekHead">
-            <div className="weekTitle">
-              <p className="eyebrow">
-                <span className={`status ${sw.kind}`}>{STATUS[sw.kind]}</span>
-                <span>{range}</span>
-                {saveStatus === "error" && <span className="status error">Couldn&rsquo;t save</span>}
-              </p>
-              <h1 className="largeTitle">{weekName(sw.monday, thisMonday)}</h1>
-            </div>
-            <div className="weekNav" role="group" aria-label="Choose week">
-              <button aria-label="Previous week" disabled={swPos <= 0} onClick={() => go(swPos - 1)}><ChevronLeft size={20} /></button>
-              <button aria-label="Next week" disabled={swPos >= weekList.length - 1} onClick={() => go(swPos + 1)}><ChevronRight size={20} /></button>
-            </div>
-          </header>
 
           {!hasData ? (
             <div className="empty">
@@ -1274,7 +1268,7 @@ function weekName(monday, thisMonday) {
   if (diff === 0) return "This week";
   if (diff === 1) return "Next week";
   if (diff === -1) return "Last week";
-  return `Week of ${fmtDM(monday)}`;
+  return `w/c ${fmtDM(monday)}`;
 }
 
 function fmt(d) {
@@ -1409,7 +1403,7 @@ const CSS = `
 .save-status.error{color:var(--redText);}
 
 /* Top bar: back on menu pages, ••• for Meals, Past weeks and Tune */
-.topbar{position:sticky;top:0;z-index:6;display:flex;justify-content:space-between;align-items:center;max-width:720px;margin:0 auto;padding:calc(env(safe-area-inset-top,0px) + 6px) 10px 6px;background:color-mix(in srgb,var(--bg) 82%,transparent);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);}
+.topbar{position:sticky;top:0;z-index:6;display:flex;justify-content:space-between;align-items:center;gap:8px;max-width:720px;margin:0 auto;padding:calc(env(safe-area-inset-top,0px) + 8px) 16px 10px;background:color-mix(in srgb,var(--bg) 82%,transparent);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);}
 .backBtn{display:inline-flex;align-items:center;gap:2px;border:0;background:none;color:var(--tintText);font-size:17px;cursor:pointer;padding:6px 4px;}
 .menuWrap{position:relative;}
 .menuBtn{width:38px;height:38px;border-radius:999px;border:0;background:var(--fill2);color:var(--tintText);display:grid;place-items:center;cursor:pointer;}
@@ -1418,20 +1412,17 @@ const CSS = `
 .menu button{border:0;background:none;text-align:left;font-size:17px;color:var(--label);padding:11px 14px;border-radius:9px;cursor:pointer;}
 .menu button:hover{background:var(--fill2);}
 
-/* Week header: big title, with the week stepper beside it */
-.weekHead{display:flex;justify-content:space-between;align-items:flex-end;gap:12px;padding:4px 4px 20px;}
-.weekTitle{display:grid;gap:6px;min-width:0;}
-.eyebrow{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin:0;font-size:13px;line-height:18px;font-weight:600;color:var(--label2);font-variant-numeric:tabular-nums;}
-.status{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 9px;border-radius:999px;font-size:12px;font-weight:600;letter-spacing:.02em;text-transform:uppercase;}
+/* Week bar: ‹ title › and status, in the sticky top bar */
+.weekBar{display:flex;align-items:center;gap:2px;min-width:0;flex:1;margin-left:-6px;}
+.weekTitle{font-family:var(--fd);font-size:clamp(22px,6vw,28px);line-height:34px;font-weight:700;letter-spacing:.005em;margin:0 2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;}
+.stepBtn{flex:none;width:34px;height:38px;border:0;border-radius:999px;background:none;color:var(--tintText);display:grid;place-items:center;cursor:pointer;}
+.stepBtn:hover:not(:disabled){background:var(--fill2);}
+.stepBtn:disabled{color:var(--label3);cursor:default;}
+.status{flex:none;margin-left:6px;display:inline-flex;align-items:center;gap:5px;height:24px;padding:0 9px;border-radius:999px;font-size:13px;font-weight:600;}
 .status.draft{background:color-mix(in srgb,var(--ds-highlight) 16%,transparent);color:var(--ds-highlight-text);}
 .status.draft::before{content:"";width:6px;height:6px;border-radius:999px;background:var(--ds-highlight);}
 .status.planned{background:var(--ds-accent-soft);color:var(--ds-accent-text);}
-.status.past{background:var(--fill2);color:var(--label2);}
-.status.error{background:color-mix(in srgb,var(--ds-negative) 14%,transparent);color:var(--ds-negative);text-transform:none;letter-spacing:0;}
-.weekNav{display:flex;gap:2px;background:var(--fill2);border-radius:999px;padding:3px;flex:none;margin-bottom:2px;}
-.weekNav button{width:40px;height:36px;border:0;border-radius:999px;background:transparent;color:var(--tintText);display:grid;place-items:center;cursor:pointer;}
-.weekNav button:hover:not(:disabled){background:var(--bg2);}
-.weekNav button:disabled{color:var(--label3);cursor:default;}
+.status.error{background:color-mix(in srgb,var(--ds-negative) 14%,transparent);color:var(--ds-negative);}
 .secTitle{font-family:var(--fd);font-size:22px;line-height:28px;font-weight:700;margin:14px 4px 0;}
 .secTitle:first-of-type{margin-top:0;}
 .meal.empty{color:var(--label3);}
