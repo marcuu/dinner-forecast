@@ -37,12 +37,9 @@ npx vercel deploy --prod
 ```
 and follow the prompts.
 
-## Google Calendar (optional)
-Dinners can be added to Google Calendar as tangerine all-day events, a whole week
-in one tap. Create an OAuth client (Web application) in Google Cloud with the
-Calendar API enabled, add your app's URL as an Authorised JavaScript origin, and
-set `NEXT_PUBLIC_GOOGLE_CLIENT_ID` in Vercel. Without it, each night still has an
-"Add to Google Calendar" link, but in the default colour. See CLAUDE.md for details.
+## Google Calendar
+Each night has an "Add to Google Calendar" link (an all-day event, prefilled), and
+each week can be downloaded as a calendar file to import in one go. No setup.
 
 ## How the model works
 Per upcoming weekday it builds a recency-weighted distribution over what you've

@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useMemo, useCallback } from "react";
-import { Dices, Plus, Trash2, ChevronLeft, ChevronRight, Check, Sparkles, Lock, ShoppingBasket, MoreHorizontal, X, Timer, CalendarPlus, CalendarCheck } from "lucide-react";
+import { Dices, Plus, Trash2, ChevronLeft, ChevronRight, Check, Sparkles, Lock, ShoppingBasket, MoreHorizontal, X, Timer, CalendarPlus } from "lucide-react";
 
 /* Ocado has no public API: we deep-link into its search or a product page the household has linked. */
 const OCADO_SEARCH = (term) => `https://www.ocado.com/search?q=${encodeURIComponent(term)}`;
@@ -611,9 +611,6 @@ export default function DinnerForecast({ initialTab = "week" } = {}) {
   const [linkDraft, setLinkDraft] = useState("");
   const [prep, setPrep] = useState({}); // week key -> { picks: {night: level}, startedAt, ticked: [keys], timers: {key: endsAt}, done }
   const [starting, setStarting] = useState(false);
-  const [gcal, setGcal] = useState({}); // week key -> { [night]: { id: Google event id, mealId } }
-  const [gcalBusy, setGcalBusy] = useState(false);
-  const [gcalErr, setGcalErr] = useState("");
   const [now, setNow] = useState(() => Date.now());
 
   const today = useMemo(() => new Date(), []);
@@ -655,7 +652,6 @@ export default function DinnerForecast({ initialTab = "week" } = {}) {
         if (st.shop && Array.isArray(st.shop.ticked)) setShop(st.shop.week ? { [isoLocal(normMonday(st.shop.week))]: st.shop.ticked } : {});
         else if (st.shop && typeof st.shop === "object") setShop(st.shop);
         if (st.prep && typeof st.prep === "object") setPrep(st.prep);
-        if (st.gcal && typeof st.gcal === "object") setGcal(st.gcal);
       } else if (!(st && st.cleared)) {
         const { lib: el, weeks: ew } = seedData();
         setLibrary(el);
@@ -672,15 +668,11 @@ export default function DinnerForecast({ initialTab = "week" } = {}) {
     if (!loaded) return;
     setSaveStatus("saving");
     const t = setTimeout(async () => {
-      const ok = await saveState({ library, weeks, params, plannedWeeks, products, shop, prep, gcal, cleared: library.length === 0 });
+      const ok = await saveState({ library, weeks, params, plannedWeeks, products, shop, prep, cleared: library.length === 0 });
       setSaveStatus(ok ? "saved" : "error");
     }, 600);
     return () => clearTimeout(t);
-  }, [library, weeks, params, plannedWeeks, products, shop, prep, gcal, loaded]);
-
-  /* load Google's sign-in script early, so the first tap can open its popup straight away */
-  useEffect(() => { if (GCAL_CLIENT_ID) loadGis(); }, []);
-
+  }, [library, weeks, params, plannedWeeks, products, shop, prep, loaded]);
 
   // meals pinned by the user — passed to the engine so anti-repetition stays correct
   const fixedMeals = useMemo(() => {
@@ -701,35 +693,6 @@ export default function DinnerForecast({ initialTab = "week" } = {}) {
     [library, weeks, params, seed, retroWeekStart]
   );
   const byId = useMemo(() => Object.fromEntries(library.map((m) => [m.id, m])), [library]);
-
-  /* put nights of a week into Google Calendar, updating or removing anything sent before */
-  const syncCalendar = useCallback(async (weekKey, monday, meals, nights = [0, 1, 2, 3, 4, 5, 6]) => {
-    setGcalBusy(true);
-    setGcalErr("");
-    let token = await gcalGetToken();
-    if (!token) { setGcalBusy(false); setGcalErr("Google Calendar didn't connect. Try again."); return false; }
-    const prev = gcal[weekKey] || {};
-    const next = { ...prev };
-    let ok = true;
-    for (const i of nights) {
-      try {
-        let res;
-        try { res = await gcalSyncNight(token, prev[i], byId[meals[i]], addDays(monday, i)); }
-        catch (e) {
-          if (e.message !== "auth") throw e;
-          gcalToken = null;
-          token = await gcalGetToken();
-          if (!token) throw e;
-          res = await gcalSyncNight(token, prev[i], byId[meals[i]], addDays(monday, i));
-        }
-        if (res) next[i] = res; else delete next[i];
-      } catch { ok = false; }
-    }
-    setGcal((G) => ({ ...G, [weekKey]: next }));
-    setGcalBusy(false);
-    if (ok) gcalAuto.set(); else setGcalErr("Some dinners didn't reach Google Calendar. Try again.");
-    return ok;
-  }, [gcal, byId]);
 
 
   /* every week you can step through: logged past weeks, confirmed weeks, and the one being forecast */
@@ -833,7 +796,6 @@ export default function DinnerForecast({ initialTab = "week" } = {}) {
     const weekMonday = isoLocal(weekStart);
     const meals = plan.map((d, i) => overrides[i] ?? d.mealId);
     setPlannedWeeks((pw) => [...pw, { weekMonday, meals }]);
-    if (GCAL_CLIENT_ID && gcalAuto.get()) syncCalendar(weekMonday, weekStart, meals); // once you've used it, confirming sends the week too
     setSel(weekMonday);
     setOpenDay(null);
     setOverrides({});
@@ -841,27 +803,7 @@ export default function DinnerForecast({ initialTab = "week" } = {}) {
     setSeed((s) => s + 1);
     setConfirmed(true);
     setTimeout(() => setConfirmed(false), 2400);
-  }, [plan, overrides, weekStart, syncCalendar]);
-
-  /* is each night of the selected week in Google Calendar as it stands now? */
-  const gcalWeek = gcal[sw.key] || {};
-  const gcalNight = swMeals.map((id, i) => {
-    const m = byId[id];
-    const e = gcalWeek[i];
-    if (!m || m.isSkip) return e ? "stale" : "none";
-    return !e ? "none" : e.mealId === m.id && e.name === m.name ? "in" : "stale";
-  });
-  const gcalSent = Object.keys(gcalWeek).length > 0;
-  const gcalWanted = gcalNight.filter((x, i) => byId[swMeals[i]] && !byId[swMeals[i]].isSkip).length;
-  const gcalInSync = gcalSent && !gcalNight.some((x, i) => x === "stale" || (x === "none" && byId[swMeals[i]] && !byId[swMeals[i]].isSkip));
-  /* once a week is in the calendar, swaps follow it there while Google's sign-in is still fresh */
-  const gcalPending = gcalSent && !gcalInSync && !gcalBusy && !gcalErr && GCAL_CLIENT_ID ? gcalNight.map((x, i) => (x === "in" ? -1 : i)).filter((i) => i >= 0).join(",") : "";
-  useEffect(() => {
-    if (!gcalPending || !gcalHasToken()) return;
-    const t = setTimeout(() => syncCalendar(sw.key, sw.monday, swMeals, gcalPending.split(",").map(Number)), 800);
-    return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gcalPending, sw.key]);
+  }, [plan, overrides, weekStart]);
 
   const confirmRetroWeek = useCallback(() => {
     if (!retroPlan.length) return;
@@ -1062,7 +1004,7 @@ export default function DinnerForecast({ initialTab = "week" } = {}) {
     } else if (sw.kind === "planned") setPlannedCell(sw.idx, i, id);
     else setCell(sw.idx, i, id);
   };
-  const go = (pos) => { const w = weekList[pos]; if (w) { setSel(w.key); setOpenDay(null); setLinking(null); setGcalErr(""); } };
+  const go = (pos) => { const w = weekList[pos]; if (w) { setSel(w.key); setOpenDay(null); setLinking(null); } };
   const openPage = (t) => { setTab(t); setMenuOpen(false); window.scrollTo(0, 0); };
   const STATUS = { past: "Eaten", planned: "Confirmed", draft: "Forecast" };
   const PAGE = { library: "Meals", history: "Past weeks", tune: "Tune the forecast" };
@@ -1147,7 +1089,6 @@ export default function DinnerForecast({ initialTab = "week" } = {}) {
                           <span className={meal ? "meal" : "meal empty"}>{meal ? meal.name : "Nothing planned"}</span>
                         </span>
                         {prepSession?.done && prepSession.picks?.[i] !== undefined && <span className="chip prepped">Prepped</span>}
-                        {gcalNight[i] === "in" && <CalendarCheck size={14} className="lockIc" aria-label="In Google Calendar" />}
                         {sw.kind === "draft" && lockedDays[i] && <Lock size={14} className="lockIc" aria-label="Kept" />}
                         <ChevronRight size={16} className="chev" />
                       </button>
@@ -1186,15 +1127,9 @@ export default function DinnerForecast({ initialTab = "week" } = {}) {
                           )}
                           {meal?.ingredients?.length > 0 && <p className="ingsLine">Needs {meal.ingredients.join(", ")}</p>}
                           {meal && !meal.isSkip && (
-                            GCAL_CLIENT_ID ? (
-                              <button className="textBtn calBtn" disabled={gcalBusy || gcalNight[i] === "in"} onClick={() => syncCalendar(sw.key, sw.monday, swMeals, [i])}>
-                                {gcalNight[i] === "in" ? <><CalendarCheck size={15} /> In Google Calendar</> : <><CalendarPlus size={15} /> {gcalNight[i] === "stale" ? "Update in Google Calendar" : "Add to Google Calendar"}</>}
-                              </button>
-                            ) : (
-                              <a className="textBtn calBtn" href={gcalLink(meal, swDates[i])} target="_blank" rel="noopener noreferrer">
-                                <CalendarPlus size={15} /> Add to Google Calendar
-                              </a>
-                            )
+                            <a className="textBtn calBtn" href={gcalLink(meal, swDates[i])} target="_blank" rel="noopener noreferrer">
+                              <CalendarPlus size={15} /> Add to Google Calendar
+                            </a>
                           )}
                         </div>
                       )}
@@ -1220,14 +1155,11 @@ export default function DinnerForecast({ initialTab = "week" } = {}) {
                 </button>
               )}
 
-              {sw.kind !== "past" && GCAL_CLIENT_ID && gcalWanted > 0 && (
-                <button className="btn wide calWeek" disabled={gcalBusy || gcalInSync} onClick={() => syncCalendar(sw.key, sw.monday, swMeals)}>
-                  {gcalBusy ? <><CalendarPlus size={17} /> Adding to Google Calendar…</>
-                    : gcalInSync ? <><CalendarCheck size={17} /> In Google Calendar</>
-                    : <><CalendarPlus size={17} /> {gcalSent ? "Update Google Calendar" : "Add week to Google Calendar"}</>}
+              {sw.kind !== "past" && swMeals.some((id) => byId[id] && !byId[id].isSkip) && (
+                <button className="btn wide calWeek" onClick={() => downloadWeekIcs(sw.key, sw.monday, swMeals, byId)}>
+                  <CalendarPlus size={17} /> Add week to calendar
                 </button>
               )}
-              {gcalErr && <p className="gf calErr">{gcalErr}</p>}
 
               {sw.kind !== "past" && (
                 <>
@@ -1671,93 +1603,45 @@ function mondayOfWeek(today, offset) {
   return d;
 }
 
-/* ---- Google Calendar: each dinner as a tangerine all-day event ----
-   With NEXT_PUBLIC_GOOGLE_CLIENT_ID set, the Calendar API is used straight from the browser
-   (Google Identity Services token, events scope only), which is the only way to set the colour.
-   Without it, each night falls back to Google's "add event" link (all-day, default colour). */
-const GCAL_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || "";
-const GCAL_CALENDAR = encodeURIComponent(process.env.NEXT_PUBLIC_GOOGLE_CALENDAR_ID || "primary");
-const GCAL_TANGERINE = "6"; // Google Calendar event colour id for Tangerine
-const GCAL_API = `https://www.googleapis.com/calendar/v3/calendars/${GCAL_CALENDAR}/events`;
+/* ---- Google Calendar: each dinner as an all-day event ----
+   A night opens Google's own "add event" page, filled in, for one tap on Save.
+   A week downloads as a calendar file; each night has a fixed UID, so importing again updates rather than duplicates. */
 const ymd = (d) => isoLocal(d).replace(/-/g, "");
 const gcalDetails = (m) => `Dinner${m.ingredients?.length ? `. Needs ${m.ingredients.join(", ")}.` : "."}`;
 const gcalLink = (m, date) =>
   `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(m.name)}` +
-  `&dates=${ymd(date)}/${ymd(addDays(date, 1))}&details=${encodeURIComponent(gcalDetails(m))}`;
-const gcalAuto = {
-  get: () => { try { return localStorage.getItem("dfc.gcalAuto") === "1"; } catch { return false; } },
-  set: () => { try { localStorage.setItem("dfc.gcalAuto", "1"); } catch {} },
-};
-
-let gisLoading = null;
-function loadGis() {
-  if (typeof window === "undefined" || !GCAL_CLIENT_ID) return Promise.resolve(null);
-  if (window.google?.accounts?.oauth2) return Promise.resolve(window.google);
-  if (!gisLoading) {
-    gisLoading = new Promise((resolve) => {
-      const s = document.createElement("script");
-      s.src = "https://accounts.google.com/gsi/client";
-      s.async = true;
-      s.onload = () => resolve(window.google || null);
-      s.onerror = () => { gisLoading = null; resolve(null); };
-      document.head.appendChild(s);
-    });
-  }
-  return gisLoading;
-}
-let gcalToken = null; // { token, exp } kept in memory only
-let gcalClient = null;
-/* a valid access token, asking Google only when there isn't one (first time: a consent popup; after that it's near-instant) */
-async function gcalGetToken() {
-  if (gcalToken && gcalToken.exp > Date.now() + 60000) return gcalToken.token;
-  const g = await loadGis();
-  if (!g) return null;
-  return new Promise((resolve) => {
-    if (!gcalClient) {
-      gcalClient = g.accounts.oauth2.initTokenClient({
-        client_id: GCAL_CLIENT_ID,
-        scope: "https://www.googleapis.com/auth/calendar.events",
-        callback: () => {},
-      });
-    }
-    gcalClient.callback = (r) => {
-      if (r?.access_token) {
-        gcalToken = { token: r.access_token, exp: Date.now() + (Number(r.expires_in) || 3600) * 1000 };
-        resolve(r.access_token);
-      } else resolve(null);
-    };
-    gcalClient.error_callback = () => resolve(null);
-    gcalClient.requestAccessToken({ prompt: "" });
+  `&dates=${ymd(date)}/${ymd(addDays(date, 1))}&details=${encodeURIComponent(gcalDetails(m))}&trp=false`;
+const icsText = (t) => String(t).replace(/\\/g, "\\\\").replace(/([,;])/g, "\\$1").replace(/\r?\n/g, "\\n");
+const icsFold = (line) => { const out = []; let rest = line; while (rest.length > 74) { out.push(rest.slice(0, 74)); rest = " " + rest.slice(74); } out.push(rest); return out.join("\r\n"); };
+function downloadWeekIcs(weekKey, monday, meals, byId) {
+  const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+/, "");
+  const events = meals.flatMap((id, i) => {
+    const m = byId[id];
+    if (!m || m.isSkip) return [];
+    const d = addDays(monday, i);
+    return [
+      "BEGIN:VEVENT",
+      `UID:${weekKey}-${i}@dinner-forecast`,
+      `DTSTAMP:${stamp}`,
+      `SEQUENCE:${Math.floor(Date.now() / 1000)}`,
+      `DTSTART;VALUE=DATE:${ymd(d)}`,
+      `DTEND;VALUE=DATE:${ymd(addDays(d, 1))}`,
+      `SUMMARY:${icsText(m.name)}`,
+      `DESCRIPTION:${icsText(gcalDetails(m))}`,
+      "TRANSP:TRANSPARENT",
+      "END:VEVENT",
+    ];
   });
-}
-const gcalHasToken = () => !!(gcalToken && gcalToken.exp > Date.now() + 60000);
-/* create, update or remove one night's event; returns the stored entry ({ id, mealId }) or null */
-async function gcalSyncNight(token, entry, meal, date) {
-  const H = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
-  if (!meal || meal.isSkip) {
-    if (entry?.id) await fetch(`${GCAL_API}/${encodeURIComponent(entry.id)}`, { method: "DELETE", headers: H }).catch(() => {});
-    return null;
-  }
-  const body = JSON.stringify({
-    summary: meal.name,
-    description: gcalDetails(meal),
-    start: { date: isoLocal(date) },
-    end: { date: isoLocal(addDays(date, 1)) },
-    colorId: GCAL_TANGERINE,
-    transparency: "transparent", // all-day dinners shouldn't show you as busy
-    status: "confirmed", // revives it if someone deleted it in Calendar
-  });
-  if (entry?.id) {
-    const r = await fetch(`${GCAL_API}/${encodeURIComponent(entry.id)}`, { method: "PATCH", headers: H, body });
-    if (r.ok) return { id: entry.id, mealId: meal.id, name: meal.name };
-    if (r.status === 401) throw new Error("auth");
-    // 404/403/410: not in this person's calendar any more, so make a fresh one
-  }
-  const r = await fetch(GCAL_API, { method: "POST", headers: H, body });
-  if (r.status === 401) throw new Error("auth");
-  if (!r.ok) throw new Error("gcal");
-  const ev = await r.json();
-  return { id: ev.id, mealId: meal.id, name: meal.name };
+  const ics = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Holme Valley Almanac//Dinner Forecast//EN", "CALSCALE:GREGORIAN", "METHOD:PUBLISH", ...events, "END:VCALENDAR"]
+    .map(icsFold).join("\r\n") + "\r\n";
+  const url = URL.createObjectURL(new Blob([ics], { type: "text/calendar;charset=utf-8" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `Dinners w-c ${fmtDM(monday)}.ics`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 function Slider({ label, hint, min, max, step, value, onChange, fmt }) {
@@ -2262,8 +2146,6 @@ details.group[open] > summary .chev{transform:rotate(90deg);}
 .prepLink{margin-top:4px;}
 .calWeek{margin-top:4px;}
 .calBtn{display:inline-flex;align-items:center;gap:6px;justify-self:start;text-decoration:none;}
-.calBtn:disabled{color:var(--label2);cursor:default;}
-.calErr{color:var(--redText);}
 .chip.prepped{background:var(--ds-accent-soft);color:var(--ds-accent-text);flex:none;}
 .chip.freezer{background:var(--ds-accent-soft);color:var(--ds-accent-text);}
 .prepPick{flex-wrap:wrap;}
