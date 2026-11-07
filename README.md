@@ -37,6 +37,10 @@ npx vercel deploy --prod
 ```
 and follow the prompts.
 
+## Google Calendar
+Each night has an "Add to Google Calendar" link (an all-day event, prefilled), and
+each week can be downloaded as a calendar file to import in one go. No setup.
+
 ## How the model works
 Per upcoming weekday it builds a recency-weighted distribution over what you've
 eaten on that day, tilts gently (veg lean, soft cap on a second treat),

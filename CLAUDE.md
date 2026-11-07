@@ -175,6 +175,19 @@ Ocado has no public API. The Shop tab deep-links each ingredient to a linked
 product page or `OCADO_SEARCH(term)`, reusing one browser tab named `ocado`.
 "Next on Ocado" opens the next unticked item and ticks it.
 
+## Google Calendar
+
+No API or sign-in; everything is links and files, so there's no setup.
+
+- Each night's panel has "Add to Google Calendar": Google's own add-event page
+  (`gcalLink`), prefilled as an all-day event on that date, marked free, with the
+  ingredients in the description. One tap on Save.
+- Non-past weeks have "Add week to calendar", which downloads an `.ics` of the
+  week's dinners (`downloadWeekIcs`), all-day and transparent. Each night has a
+  fixed UID (`<Monday>-<night>@dinner-forecast`), so importing a changed week
+  again updates rather than duplicates. Skip and blank nights are left out.
+- There's no colour: Google only sets event colours through its Calendar API.
+
 ## Supabase / security notes
 
 - The anon key in `lib/supabase.js` is **public by design** (it ships to the

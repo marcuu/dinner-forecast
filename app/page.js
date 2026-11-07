@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useMemo, useCallback } from "react";
-import { Dices, Plus, Trash2, ChevronLeft, ChevronRight, Check, Sparkles, Lock, ShoppingBasket, MoreHorizontal, X, Timer } from "lucide-react";
+import { Dices, Plus, Trash2, ChevronLeft, ChevronRight, Check, Sparkles, Lock, ShoppingBasket, MoreHorizontal, X, Timer, CalendarPlus } from "lucide-react";
 
 /* Ocado has no public API: we deep-link into its search or a product page the household has linked. */
 const OCADO_SEARCH = (term) => `https://www.ocado.com/search?q=${encodeURIComponent(term)}`;
@@ -1126,6 +1126,11 @@ export default function DinnerForecast({ initialTab = "week" } = {}) {
                             </label>
                           )}
                           {meal?.ingredients?.length > 0 && <p className="ingsLine">Needs {meal.ingredients.join(", ")}</p>}
+                          {meal && !meal.isSkip && (
+                            <a className="textBtn calBtn" href={gcalLink(meal, swDates[i])} target="_blank" rel="noopener noreferrer">
+                              <CalendarPlus size={15} /> Add to Google Calendar
+                            </a>
+                          )}
                         </div>
                       )}
                     </li>
@@ -1147,6 +1152,12 @@ export default function DinnerForecast({ initialTab = "week" } = {}) {
               {sw.kind !== "past" && pickList.length > 0 && (
                 <button className="btn wide prepLink" onClick={() => { setTab("prep"); window.scrollTo(0, 0); }}>
                   <Timer size={17} /> {prepSession?.done ? "Prep done" : prepStart ? "Carry on prepping" : `Meal prep: ${pickList.length} ${pickList.length === 1 ? "dinner" : "dinners"}`}
+                </button>
+              )}
+
+              {sw.kind !== "past" && swMeals.some((id) => byId[id] && !byId[id].isSkip) && (
+                <button className="btn wide calWeek" onClick={() => downloadWeekIcs(sw.key, sw.monday, swMeals, byId)}>
+                  <CalendarPlus size={17} /> Add week to calendar
                 </button>
               )}
 
@@ -1590,6 +1601,47 @@ function mondayOfWeek(today, offset) {
   d.setDate(d.getDate() - back + offset * 7);
   d.setHours(0, 0, 0, 0);
   return d;
+}
+
+/* ---- Google Calendar: each dinner as an all-day event ----
+   A night opens Google's own "add event" page, filled in, for one tap on Save.
+   A week downloads as a calendar file; each night has a fixed UID, so importing again updates rather than duplicates. */
+const ymd = (d) => isoLocal(d).replace(/-/g, "");
+const gcalDetails = (m) => `Dinner${m.ingredients?.length ? `. Needs ${m.ingredients.join(", ")}.` : "."}`;
+const gcalLink = (m, date) =>
+  `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(m.name)}` +
+  `&dates=${ymd(date)}/${ymd(addDays(date, 1))}&details=${encodeURIComponent(gcalDetails(m))}&trp=false`;
+const icsText = (t) => String(t).replace(/\\/g, "\\\\").replace(/([,;])/g, "\\$1").replace(/\r?\n/g, "\\n");
+const icsFold = (line) => { const out = []; let rest = line; while (rest.length > 74) { out.push(rest.slice(0, 74)); rest = " " + rest.slice(74); } out.push(rest); return out.join("\r\n"); };
+function downloadWeekIcs(weekKey, monday, meals, byId) {
+  const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+/, "");
+  const events = meals.flatMap((id, i) => {
+    const m = byId[id];
+    if (!m || m.isSkip) return [];
+    const d = addDays(monday, i);
+    return [
+      "BEGIN:VEVENT",
+      `UID:${weekKey}-${i}@dinner-forecast`,
+      `DTSTAMP:${stamp}`,
+      `SEQUENCE:${Math.floor(Date.now() / 1000)}`,
+      `DTSTART;VALUE=DATE:${ymd(d)}`,
+      `DTEND;VALUE=DATE:${ymd(addDays(d, 1))}`,
+      `SUMMARY:${icsText(m.name)}`,
+      `DESCRIPTION:${icsText(gcalDetails(m))}`,
+      "TRANSP:TRANSPARENT",
+      "END:VEVENT",
+    ];
+  });
+  const ics = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Holme Valley Almanac//Dinner Forecast//EN", "CALSCALE:GREGORIAN", "METHOD:PUBLISH", ...events, "END:VCALENDAR"]
+    .map(icsFold).join("\r\n") + "\r\n";
+  const url = URL.createObjectURL(new Blob([ics], { type: "text/calendar;charset=utf-8" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `Dinners w-c ${fmtDM(monday)}.ics`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 function Slider({ label, hint, min, max, step, value, onChange, fmt }) {
@@ -2092,6 +2144,8 @@ details.group[open] > summary .chev{transform:rotate(90deg);}
 
 /* Meal prep */
 .prepLink{margin-top:4px;}
+.calWeek{margin-top:4px;}
+.calBtn{display:inline-flex;align-items:center;gap:6px;justify-self:start;text-decoration:none;}
 .chip.prepped{background:var(--ds-accent-soft);color:var(--ds-accent-text);flex:none;}
 .chip.freezer{background:var(--ds-accent-soft);color:var(--ds-accent-text);}
 .prepPick{flex-wrap:wrap;}
