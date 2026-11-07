@@ -105,6 +105,8 @@ row id `"default"`:
   (staple defaults from `LIKELY_STAPLE`; an explicit `false` overrides it)
 - `shop` — `{ [Monday "YYYY-MM-DD"]: [ingredient keys] }`, what's already in the
   Ocado basket for each week (older single-week shape is migrated on load)
+- `gcal` — `{ [Monday]: { [night]: { id, mealId, name } } }`, Google Calendar
+  events already sent for each week
 - `cleared` — flag so a deliberately emptied dataset isn't re-seeded
 
 Meal tags are auto-guessed from the name by `autoTag` on add, and drive the
@@ -174,6 +176,32 @@ prep-friendly dinners:
 Ocado has no public API. The Shop tab deep-links each ingredient to a linked
 product page or `OCADO_SEARCH(term)`, reusing one browser tab named `ocado`.
 "Next on Ocado" opens the next unticked item and ticks it.
+
+## Google Calendar
+
+Each dinner can go into Google Calendar as an all-day event coloured Tangerine
+(`colorId: "6"`), marked free (not busy). Only the Calendar API can set a colour,
+so with `NEXT_PUBLIC_GOOGLE_CLIENT_ID` set the browser gets a token via Google
+Identity Services (scope `calendar.events`, kept in memory only) and calls the API
+directly:
+
+- "Add week to Google Calendar" on any non-past week; a per-night button in each
+  day's panel. Event ids are stored in `gcal[weekMonday][night] = { id, mealId,
+  name }`, so re-sending patches rather than duplicates, and a night set to
+  nothing or skip deletes its event.
+- Once a week is in the calendar, swaps sync on their own while the token is
+  fresh (otherwise the button reads "Update Google Calendar"). After the first
+  successful send, "Confirm week" sends the confirmed week automatically (a
+  per-device flag in `localStorage`).
+- Target calendar is `primary`, overridable with `NEXT_PUBLIC_GOOGLE_CALENDAR_ID`.
+- Without a client id, each night falls back to Google's "add event" link
+  (all-day, but default colour, because links can't set one).
+
+Setup: Google Cloud console → enable the Google Calendar API → OAuth consent
+screen (External, add the household as test users) → Credentials → OAuth client
+ID, type Web application, with the app's origins (e.g. `https://<app>.vercel.app`,
+`http://localhost:3000`) as Authorised JavaScript origins. Put the client id in
+`NEXT_PUBLIC_GOOGLE_CLIENT_ID` on Vercel. The client id is public, not a secret.
 
 ## Supabase / security notes
 
